@@ -206,7 +206,7 @@ mod tests {
     use proptest::prelude::ProptestConfig;
 
     #[cfg(miri)]
-    const PROPTEST_CASES: u32 = 3;
+    const PROPTEST_CASES: u32 = 1;
     #[cfg(not(miri))]
     const PROPTEST_CASES: u32 = 256;
 
