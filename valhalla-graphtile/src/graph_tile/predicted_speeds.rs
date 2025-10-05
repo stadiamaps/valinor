@@ -203,8 +203,19 @@ fn decompress_bucket_from_slice(coefficients: &[i16], bucket_idx: usize) -> f32 
 mod tests {
     use super::*;
     use proptest::{prop_assert, proptest};
+    use proptest::prelude::ProptestConfig;
+
+    #[cfg(miri)]
+    const PROPTEST_CASES: u32 = 3;
+    #[cfg(not(miri))]
+    const PROPTEST_CASES: u32 = 256;
 
     proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: PROPTEST_CASES,
+            .. ProptestConfig::default()
+        })]
+
         /// For arbitrary non-negative weekly speeds, the decoded speeds should not go negative,
         /// allowing a tiny epsilon for floating point jitter.
         #[test]
@@ -234,8 +245,8 @@ mod tests {
             base in 20.0f32..80.0f32,      // baseline kph
             amp1 in  0.0f32..25.0f32,      // daily-ish variation
             amp2 in  0.0f32..10.0f32,      // smaller component
-            phase1 in 0.0f32..(2.0*std::f32::consts::PI),
-            phase2 in 0.0f32..(2.0*std::f32::consts::PI),
+            phase1 in 0.0f32..(std::f32::consts::TAU),
+            phase2 in 0.0f32..(std::f32::consts::TAU),
             noise_scale in 0.0f32..1.0f32  // tiny jitter
         ) {
             /// Helper: mean absolute error and max absolute error.
