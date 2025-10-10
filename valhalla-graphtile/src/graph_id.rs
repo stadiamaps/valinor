@@ -52,13 +52,22 @@ pub enum InvalidGraphIdError {
 ///
 /// # Bit field layout
 ///
-/// Bit fields within the ID include:
-///   - 3 bits for hierarchy level (these are the least significant 3 bits)
-///   - 22 bits for tile ID (supports lat,lon tiles down to 1/8 degree)
-///   - 21 bits for the index within the tile
+/// Here is a lovely ANSI art diagram of the bit field layout
+/// from the Valhalla documentation.
+///
+/// ```text
+///        MSb                                     LSb
+///        ▼                                       ▼
+/// bit   64         46        25         3        0
+/// pos    ┌──────────┬─────────┬─────────┬────────┐
+///        │ RESERVED │ id      │ tileid  │ level  │
+///        └──────────┴─────────┴─────────┴────────┘
+/// size     18         21        22        3
+///```
 ///
 /// Note that there are only 46 used bits in the scheme (ask Valhalla's authors why 46).
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct GraphId(u64);
 
 impl GraphId {
