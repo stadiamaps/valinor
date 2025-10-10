@@ -34,9 +34,9 @@ pub const COEFFICIENT_COUNT: usize = 200;
 const DECODED_SPEED_SIZE: usize = 2 * COEFFICIENT_COUNT;
 
 // DCT-III constants for speed decoding and normalization
-#[allow(clippy::cast_precision_loss, reason = "BUCKETS_PER_WEEK is always < 23 bits")]
+#[allow(clippy::cast_precision_loss, reason = "BUCKETS_PER_WEEK is always <= 23 bits")]
 const PI_BUCKET_CONST: f32 = {
-    assert!(BUCKETS_PER_WEEK < 2usize.pow(23));
+    assert!(BUCKETS_PER_WEEK < 2usize.pow(24));
     std::f32::consts::PI / BUCKETS_PER_WEEK as f32
 };
 static SPEED_NORM: LazyLock<f32> = LazyLock::new(|| (2.0f32 / 2016.0).sqrt());
@@ -46,13 +46,13 @@ static COS_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
     let mut t = Vec::with_capacity(COEFFICIENT_COUNT * BUCKETS_PER_WEEK);
     // Fill in bucket-major order
     for bucket in 0..BUCKETS_PER_WEEK {
-        #[allow(clippy::cast_precision_loss, reason = "BUCKETS_PER_WEEK is always < 23 bits")]
+        #[allow(clippy::cast_precision_loss, reason = "BUCKETS_PER_WEEK is always <= 23 bits")]
         let bucket_center = (bucket as f32) + 0.5;
         for c in 0..COEFFICIENT_COUNT {
             const {
-                assert!(COEFFICIENT_COUNT < 2usize.pow(23));
+                assert!(COEFFICIENT_COUNT < 2usize.pow(24));
             }
-            #[allow(clippy::cast_precision_loss, reason = "COEFFICIENT_COUNT is always < 23 bits")]
+            #[allow(clippy::cast_precision_loss, reason = "COEFFICIENT_COUNT is always <= 23 bits")]
             t.push((PI_BUCKET_CONST * bucket_center * c as f32).cos());
         }
     }
@@ -110,12 +110,12 @@ pub fn decompress_speed_bucket(coefficients: &[i16; COEFFICIENT_COUNT], bucket_i
     let row = cos_row(bucket_idx);
 
     // DCT-III reconstruction with normalization.
-    let mut speed = f32::from(coefficients[0]) * std::f32::consts::FRAC_1_SQRT_2;
+    let init = f32::from(coefficients[0]) * std::f32::consts::FRAC_1_SQRT_2;
+    let speed = coefficients.iter().zip(row.iter()).skip(1).fold(init, |acc, (coeff, c)| {
+        // Remaining terms: sum_k coeff[k] * cos_row[k]
+        acc + f32::from(*coeff) * c
+    });
 
-    // Remaining terms: sum_k coeff[k] * cos_row[k]
-    for (coeff, &c) in coefficients.iter().zip(row.iter()).skip(1) {
-        speed += f32::from(*coeff) * c;
-    }
     speed * *SPEED_NORM
 }
 
@@ -124,7 +124,7 @@ pub fn decompress_speed_bucket(coefficients: &[i16; COEFFICIENT_COUNT], bucket_i
 pub fn encode_compressed_speeds(coefficients: &[i16; COEFFICIENT_COUNT]) -> String {
     let mut raw = Vec::with_capacity(DECODED_SPEED_SIZE);
     for &c in coefficients {
-        raw.extend(&i16::to_be_bytes(c));
+        raw.extend(i16::to_be_bytes(c));
     }
     STANDARD.encode(raw)
 }
@@ -203,19 +203,10 @@ fn decompress_bucket_from_slice(coefficients: &[i16], bucket_idx: usize) -> f32 
 mod tests {
     use super::*;
     use proptest::{prop_assert, proptest};
-    use proptest::prelude::ProptestConfig;
 
-    #[cfg(miri)]
-    const PROPTEST_CASES: u32 = 1;
+    // Temporarily not run under miri, since the trig ops are REALLY slow
     #[cfg(not(miri))]
-    const PROPTEST_CASES: u32 = 256;
-
     proptest! {
-        #![proptest_config(ProptestConfig {
-            cases: PROPTEST_CASES,
-            .. ProptestConfig::default()
-        })]
-
         /// For arbitrary non-negative weekly speeds, the decoded speeds should not go negative,
         /// allowing a tiny epsilon for floating point jitter.
         #[test]

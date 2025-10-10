@@ -23,7 +23,7 @@ mod sign;
 mod transit;
 mod turn_lane;
 
-use crate::{
+pub use crate::{
     Access,
     graph_id::{GraphId, InvalidGraphIdError},
 };
