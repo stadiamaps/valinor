@@ -122,9 +122,9 @@ pub fn decompress_speed_bucket(coefficients: &[i16; COEFFICIENT_COUNT], bucket_i
 /// Pack transformed speed values into a base64 string.
 /// Each i16 is serialized big-endian to match the C++.
 pub fn encode_compressed_speeds(coefficients: &[i16; COEFFICIENT_COUNT]) -> String {
-    let mut raw = Vec::with_capacity(DECODED_SPEED_SIZE);
-    for &c in coefficients {
-        raw.extend(i16::to_be_bytes(c));
+    let mut raw = [0u8; DECODED_SPEED_SIZE];
+    for (i, &c) in coefficients.iter().enumerate() {
+        raw[2*i..2*i+2].copy_from_slice(&c.to_be_bytes());
     }
     STANDARD.encode(raw)
 }
@@ -144,8 +144,7 @@ pub fn decode_compressed_speeds(encoded: &str) -> Result<[i16; COEFFICIENT_COUNT
     }
     let mut out = [0i16; COEFFICIENT_COUNT];
     for (i, chunk) in raw.chunks_exact(2).enumerate() {
-        let be = u16::from_be_bytes([chunk[0], chunk[1]]);
-        out[i] = be as i16;
+        out[i] = i16::from_be_bytes([chunk[0], chunk[1]]);
     }
     Ok(out)
 }
