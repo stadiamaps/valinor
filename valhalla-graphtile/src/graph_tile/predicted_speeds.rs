@@ -42,7 +42,7 @@ const PI_BUCKET_CONST: f32 = {
 static SPEED_NORM: LazyLock<f32> = LazyLock::new(|| (2.0f32 / 2016.0).sqrt());
 
 /// Lazily initialized cosine lookup table.
-static COS_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
+static COS_TABLE: LazyLock<Box<[f32]>> = LazyLock::new(|| {
     let mut t = Vec::with_capacity(COEFFICIENT_COUNT * BUCKETS_PER_WEEK);
     // Fill in bucket-major order
     for bucket in 0..BUCKETS_PER_WEEK {
@@ -56,7 +56,7 @@ static COS_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
             t.push((PI_BUCKET_CONST * bucket_center * c as f32).cos());
         }
     }
-    t
+    t.into_boxed_slice()
 });
 
 /// Get the cosine row for a specific bucket (zero-indexed by week).
