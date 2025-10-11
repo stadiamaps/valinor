@@ -19,6 +19,7 @@ bit-twiddling-helpers = { workspace = true }
 enumset = "1.1.7"
 integer-encoding = "4.0.2"
 lru = { workspace = true }
+trig-const = "0.3.0"
 serde = { workspace = true, optional = true }
 zerocopy = { workspace = true }
 zerocopy-derive = { workspace = true }

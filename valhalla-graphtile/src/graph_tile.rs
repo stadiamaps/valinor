@@ -18,11 +18,12 @@ mod directed_edge;
 mod edge_info;
 mod header;
 mod node;
+pub mod predicted_speeds;
 mod sign;
 mod transit;
 mod turn_lane;
 
-use crate::{
+pub use crate::{
     Access,
     graph_id::{GraphId, InvalidGraphIdError},
 };
