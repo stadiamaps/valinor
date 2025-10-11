@@ -528,7 +528,7 @@ mod tests {
                 let s_rounded = (s + 0.5).floor() as u32;
                 assert!(
                     within_threshold(s_rounded, exp as u32),
-                    "Speed outside of range at bucket {i}"
+                    "Speed outside of range at bucket {i}. Expected {exp}; found {s_rounded}"
                 );
             }
         }
