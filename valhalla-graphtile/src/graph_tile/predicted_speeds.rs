@@ -33,37 +33,66 @@ pub const COEFFICIENT_COUNT: usize = 200;
 /// Each value (`i16`) is encoded as 2 bytes in big-endian order.
 const DECODED_SPEED_SIZE: usize = 2 * COEFFICIENT_COUNT;
 
-// DCT-III constants for speed decoding and normalization
-#[allow(clippy::cast_precision_loss, reason = "BUCKETS_PER_WEEK is always <= 23 bits")]
-const PI_BUCKET_CONST: f32 = {
-    assert!(BUCKETS_PER_WEEK < 2usize.pow(24));
-    std::f32::consts::PI / BUCKETS_PER_WEEK as f32
-};
-static SPEED_NORM: LazyLock<f32> = LazyLock::new(|| (2.0f32 / 2016.0).sqrt());
-
 /// Lazily initialized cosine lookup table.
-static COS_TABLE: LazyLock<Box<[f32]>> = LazyLock::new(|| {
-    let mut t = Vec::with_capacity(COEFFICIENT_COUNT * BUCKETS_PER_WEEK);
-    // Fill in bucket-major order
+///
+/// We pre-scale the table as an additional optimization from the Valhalla version.
+/// This adds negligible additional ops during init,
+/// and saves a bunch later during runtime without resorting to a compile-time table or similar
+/// (which incurs a RAM penalty for everyone).
+///
+/// This optimization was born of necessity wanting to run tests under Miri.
+/// While Miri is not an indicator of performance on bare metal,
+/// the floating point and trig op reduction when pre-scaling the table
+/// results in approximately 100x faster tests under Miri,
+/// and a surprisingly measurable (~5 sec -> ~3.5 sec) test execution time on bare metal
+/// (Apple Silicon M1 Max).
+static COS_TABLE: LazyLock<Box<[[f32; COEFFICIENT_COUNT]]>> = LazyLock::new(|| {
+    assert!(BUCKETS_PER_WEEK < 2usize.pow(24));
+
+    // DCT-III constants for speed decoding and normalization
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "BUCKETS_PER_WEEK is always <= 23 bits"
+    )]
+    const PI_BUCKET_CONST: f32 = std::f32::consts::PI / BUCKETS_PER_WEEK as f32;
+
+    // Uses the trig_const crate to precompute this at compile time within an acceptable range of error.
+    // If sqrt is ever made stable in const contexts, we can drop this dependency.
+    const SPEED_NORM: f32 = const { trig_const::sqrt(2.0 / BUCKETS_PER_WEEK as f64) as f32 };
+
+    let mut rows: Vec<[f32; COEFFICIENT_COUNT]> = vec![[0.0; COEFFICIENT_COUNT]; BUCKETS_PER_WEEK];
+
     for bucket in 0..BUCKETS_PER_WEEK {
-        #[allow(clippy::cast_precision_loss, reason = "BUCKETS_PER_WEEK is always <= 23 bits")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "BUCKETS_PER_WEEK is always <= 23 bits"
+        )]
         let bucket_center = (bucket as f32) + 0.5;
-        for c in 0..COEFFICIENT_COUNT {
-            const {
-                assert!(COEFFICIENT_COUNT < 2usize.pow(24));
-            }
-            #[allow(clippy::cast_precision_loss, reason = "COEFFICIENT_COUNT is always <= 23 bits")]
-            t.push((PI_BUCKET_CONST * bucket_center * c as f32).cos());
+
+        let row = &mut rows[bucket];
+
+        // c == 0 column (DC) with extra 1/sqrt(2)
+        row[0] = (PI_BUCKET_CONST * bucket_center * 0.0f32).cos()
+            * SPEED_NORM
+            * std::f32::consts::FRAC_1_SQRT_2;
+
+        // c >= 1 columns
+        for c in 1..COEFFICIENT_COUNT {
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "COEFFICIENT_COUNT is always <= 23 bits"
+            )]
+            let v = (PI_BUCKET_CONST * bucket_center * c as f32).cos() * SPEED_NORM;
+            row[c] = v;
         }
     }
-    t.into_boxed_slice()
+    rows.into_boxed_slice()
 });
 
-/// Get the cosine row for a specific bucket (zero-indexed by week).
+/// Get the (pre-scaled) cosine row for a specific bucket (zero-indexed by week).
 #[inline]
-fn cos_row(bucket: usize) -> &'static [f32] {
-    let start = bucket * COEFFICIENT_COUNT;
-    &COS_TABLE[start..start + COEFFICIENT_COUNT]
+fn cos_row(bucket: usize) -> &'static [f32; COEFFICIENT_COUNT] {
+    &COS_TABLE[bucket]
 }
 
 #[derive(Debug, Error)]
@@ -71,32 +100,28 @@ pub enum PredictedSpeedCodecError {
     #[error("Base64 decoding error: {0:?}")]
     Base64DecodeError(#[from] base64::DecodeError),
     #[error("Incorrect number of bytes decoded: found {count}; expected {DECODED_SPEED_SIZE}")]
-    IncorrectByteCount {
-        count: usize
-    }
+    IncorrectByteCount { count: usize },
 }
 
 /// Compress a full week of speed buckets by truncating its DCT-II.
 ///
 /// Speeds are expected to be specified in kilometers per hour.
+#[inline]
 pub fn compress_speed_buckets(speeds: &[f32; BUCKETS_PER_WEEK]) -> [i16; COEFFICIENT_COUNT] {
-    let mut coeffs = [0f32; COEFFICIENT_COUNT];
+    let mut acc = [0f32; COEFFICIENT_COUNT];
 
-    // DCT-II accumulation (bucket-major) using the precomputed cosines.
+    // DCT-II accumulation (bucket-major) using the precomputed, scaled cosines.
     for (bucket, &speed) in speeds.iter().enumerate() {
         let row = cos_row(bucket);
-        for (c, &cosv) in row.iter().enumerate() {
-            coeffs[c] += cosv * speed;
+        for (a, &basis) in acc.iter_mut().zip(row.iter()) {
+            *a += speed * basis;
         }
     }
 
-    // DC component scaling
-    coeffs[0] *= std::f32::consts::FRAC_1_SQRT_2;
-
-    // Quantize with normalization and round to i16
+    // Quantize (round) directly to i16
     let mut result = [0i16; COEFFICIENT_COUNT];
-    for (i, &coeff) in coeffs.iter().enumerate() {
-        result[i] = (*SPEED_NORM * coeff).round() as i16;
+    for (i, coeff) in acc.iter().enumerate() {
+        result[i] = coeff.round() as i16;
     }
     result
 }
@@ -109,22 +134,24 @@ pub fn compress_speed_buckets(speeds: &[f32; BUCKETS_PER_WEEK]) -> [i16; COEFFIC
 pub fn decompress_speed_bucket(coefficients: &[i16; COEFFICIENT_COUNT], bucket_idx: usize) -> f32 {
     let row = cos_row(bucket_idx);
 
-    // DCT-III reconstruction with normalization.
-    let init = f32::from(coefficients[0]) * std::f32::consts::FRAC_1_SQRT_2;
-    let speed = coefficients.iter().zip(row.iter()).skip(1).fold(init, |acc, (coeff, c)| {
-        // Remaining terms: sum_k coeff[k] * cos_row[k]
-        acc + f32::from(*coeff) * c
-    });
-
-    speed * *SPEED_NORM
+    // DCT-III reconstruction using the normalized cosine rows.
+    // Regrettably, the manual messy indexed loop is the only way to get this code to auto-vectorize
+    // at the time of this writing.
+    let mut s = 0.0f32;
+    for i in 0..COEFFICIENT_COUNT {
+        s = row[i].mul_add(f32::from(coefficients[i]), s);
+    }
+    s
 }
 
 /// Pack transformed speed values into a base64 string.
 /// Each i16 is serialized big-endian to match the C++.
 pub fn encode_compressed_speeds(coefficients: &[i16; COEFFICIENT_COUNT]) -> String {
+    // Exact-sized stack buffer; unfortunately also needs to be written out explicitly for now
+    // to avoid a bunch of tiny extends on a vector
     let mut raw = [0u8; DECODED_SPEED_SIZE];
     for (i, &c) in coefficients.iter().enumerate() {
-        raw[2*i..2*i+2].copy_from_slice(&c.to_be_bytes());
+        raw[2 * i..2 * i + 2].copy_from_slice(&c.to_be_bytes());
     }
     STANDARD.encode(raw)
 }
@@ -134,13 +161,12 @@ pub fn encode_compressed_speeds(coefficients: &[i16; COEFFICIENT_COUNT]) -> Stri
 /// # Errors
 ///
 /// Fails if the decoded byte length != 400.
-pub fn decode_compressed_speeds(encoded: &str) -> Result<[i16; COEFFICIENT_COUNT], PredictedSpeedCodecError> {
-    let raw = STANDARD
-        .decode(encoded.as_bytes())?;
+pub fn decode_compressed_speeds(
+    encoded: &str,
+) -> Result<[i16; COEFFICIENT_COUNT], PredictedSpeedCodecError> {
+    let raw = STANDARD.decode(encoded.as_bytes())?;
     if raw.len() != DECODED_SPEED_SIZE {
-        return Err(PredictedSpeedCodecError::IncorrectByteCount {
-            count: raw.len()
-        });
+        return Err(PredictedSpeedCodecError::IncorrectByteCount { count: raw.len() });
     }
     let mut out = [0i16; COEFFICIENT_COUNT];
     for (i, chunk) in raw.chunks_exact(2).enumerate() {
@@ -182,20 +208,17 @@ impl<'a> PredictedSpeeds<'a> {
 }
 
 /// Slice-based reconstruction to avoid array conversion in [`PredictedSpeeds::speed`].
+///
+/// TODO: This is essentially identical to [`decompress_speed_bucket`]; we should try to get rid of one...
 #[inline]
 fn decompress_bucket_from_slice(coefficients: &[i16], bucket_idx: usize) -> f32 {
     debug_assert!(coefficients.len() >= COEFFICIENT_COUNT);
     let row = cos_row(bucket_idx);
-    let mut speed = f32::from(coefficients[0]) * std::f32::consts::FRAC_1_SQRT_2;
-    for (coef, &c) in coefficients
-        .iter()
-        .zip(row.iter())
-        .skip(1)
-        .take(COEFFICIENT_COUNT - 1)
-    {
-        speed += f32::from(*coef) * c;
+    let mut s = 0.0f32;
+    for i in 0..COEFFICIENT_COUNT {
+        s = row[i].mul_add(f32::from(coefficients[i]), s);
     }
-    speed * *SPEED_NORM
+    s
 }
 
 #[cfg(test)]

@@ -1970,6 +1970,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "trig-const"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6a4c8f8ed144d6fd842b71e9fc9248ab646e7f4fb4d9927f601d62d848c287f"
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2027,6 +2033,7 @@ dependencies = [
  "self_cell",
  "serde",
  "thiserror 2.0.14",
+ "trig-const",
  "zerocopy",
  "zerocopy-derive",
 ]

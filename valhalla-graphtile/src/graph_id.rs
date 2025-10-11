@@ -1,8 +1,8 @@
 use crate::tile_hierarchy::{STANDARD_LEVELS, TRANSIT_LEVEL};
-use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
 #[cfg(feature = "serde")]
 use serde::Serialize;
+use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// The max valid hierarchy level.
