@@ -320,7 +320,7 @@ impl DirectedEdge {
     /// This is assigned from a variety of factors.
     /// See <https://valhalla.github.io/valhalla/speeds/>.
     ///
-    /// TODO: Values above 250 are special
+    /// TODO: Values above 250 are special. Reflect this in types?
     #[inline]
     pub const fn speed(&self) -> u8 {
         self.third_bitfield.speed()
@@ -331,7 +331,7 @@ impl DirectedEdge {
     /// This is assigned from a variety of factors.
     /// See <https://valhalla.github.io/valhalla/speeds/>.
     ///
-    /// TODO: Values above 250 are special
+    /// TODO: Values above 250 are special. Reflect this in types?
     #[inline]
     pub const fn free_flow_speed(&self) -> u8 {
         self.third_bitfield.free_flow_speed()
@@ -342,7 +342,7 @@ impl DirectedEdge {
     /// This is assigned from a variety of factors.
     /// See <https://valhalla.github.io/valhalla/speeds/>.
     ///
-    /// TODO: Values above 250 are special
+    /// TODO: Values above 250 are special. Reflect this in types?
     #[inline]
     pub const fn constrained_flow_speed(&self) -> u8 {
         self.third_bitfield.constrained_flow_speed()
@@ -353,7 +353,7 @@ impl DirectedEdge {
     /// This is assigned from a variety of factors.
     /// See <https://valhalla.github.io/valhalla/speeds/>.
     ///
-    /// TODO: Values above 250 are special
+    /// TODO: Values above 250 are special. Reflect this in types?
     #[inline]
     pub const fn truck_speed(&self) -> u8 {
         self.third_bitfield.truck_speed()

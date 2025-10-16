@@ -23,6 +23,7 @@ mod sign;
 mod transit;
 mod turn_lane;
 
+use crate::graph_tile::predicted_speeds::{COEFFICIENT_COUNT, PredictedSpeeds};
 pub use crate::{
     Access,
     graph_id::{GraphId, InvalidGraphIdError},
@@ -104,13 +105,26 @@ pub trait GraphTile {
     /// or the index is invalid.
     fn get_ext_directed_edge(&self, id: GraphId) -> Result<&DirectedEdgeExt, LookupError>;
 
-    /// Gets access restriction for a directed edge
-    /// which apply to *any* of the supplied access modes (ex: auto, bicycle, etc.).
+    /// Gets access restrictions for a directed edge.
+    ///
+    /// The returned list includes restrictions that apply
+    /// to *any* of the supplied access modes (ex: auto, bicycle, etc.).
     fn get_access_restrictions(
         &self,
         directed_edge_index: u32,
         access_modes: EnumSet<Access>,
     ) -> Vec<&AccessRestriction>;
+
+    /// Gets predicted speed information for a directed edge.
+    ///
+    /// `seconds_from_start_of_week` is measured from midnight Sunday **local time**.
+    /// The output is measured in kilometers per hour.
+    /// Returns `None` if the edge at this index does not have predicted speed information.
+    fn get_predicted_speed(
+        &self,
+        directed_edge_index: usize,
+        seconds_from_start_of_week: u32,
+    ) -> Option<f32>;
 
     /// Gets edge info for a directed edge.
     ///
@@ -187,6 +201,16 @@ impl GraphTile for OwnedGraphTile {
     }
 
     #[inline]
+    fn get_predicted_speed(
+        &self,
+        directed_edge_index: usize,
+        seconds_from_start_of_week: u32,
+    ) -> Option<f32> {
+        self.borrow_dependent()
+            .get_predicted_speed(directed_edge_index, seconds_from_start_of_week)
+    }
+
+    #[inline]
     fn get_edge_info(&self, directed_edge: &DirectedEdge) -> Result<EdgeInfo<'_>, GraphTileError> {
         self.borrow_dependent().get_edge_info(directed_edge)
     }
@@ -237,7 +261,7 @@ struct GraphTileView<'a> {
     // TODO: Complex reverse restrictions
     // TODO: Street names (names here)
     // TODO: Lane connectivity
-    // TODO: Predicted speeds
+    predicted_speeds: Option<PredictedSpeeds<'a>>,
     // TODO: Stop one stops(?)
     // TODO: Route one stops(?)
     // TODO: Operator one stops(?)
@@ -327,6 +351,20 @@ impl GraphTile for GraphTileView<'_> {
             .take_while(|e| e.edge_index() == directed_edge_index)
             .filter(|e| !e.affected_access_modes().is_disjoint(access_modes))
             .collect()
+    }
+
+    fn get_predicted_speed(
+        &self,
+        directed_edge_index: usize,
+        seconds_from_start_of_week: u32,
+    ) -> Option<f32> {
+        self.predicted_speeds.and_then(|ps| {
+            if self.directed_edges[directed_edge_index].has_predicted_speed() {
+                ps.speed(directed_edge_index, seconds_from_start_of_week)
+            } else {
+                None
+            }
+        })
     }
 
     fn get_edge_info(&self, directed_edge: &DirectedEdge) -> Result<EdgeInfo<'_>, GraphTileError> {
@@ -447,6 +485,34 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         let raw_graph_id: U64<LE> = transmute!(slice);
         let edge_bins = GraphId::try_from_id(raw_graph_id.get())?;
 
+        // TODO: Complex forward restrictions
+        // TODO: Complex reverse restrictions
+        // TODO: Street names (names here)
+        // TODO: Lane connectivity
+
+        let predicted_speeds = if header.predicted_speeds_count() > 0 {
+            let predicted_speed_offset = header.predicted_speeds_offset.get() as usize;
+            let (offsets, profile_data) = <[u32]>::ref_from_prefix_with_elems(
+                &bytes[predicted_speed_offset..],
+                header.directed_edge_count() as usize,
+            )
+            .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+
+            let (profiles, _) = <[i16]>::ref_from_prefix_with_elems(
+                profile_data,
+                header.predicted_speeds_count() as usize * COEFFICIENT_COUNT,
+            )
+            .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+
+            Some(PredictedSpeeds::new(offsets, profiles))
+        } else {
+            None
+        };
+
+        // TODO: Stop one stops(?)
+        // TODO: Route one stops(?)
+        // TODO: Operator one stops(?)
+
         Ok(Self {
             memory: bytes,
             header,
@@ -464,6 +530,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             turn_lanes,
             admins,
             edge_bins,
+            predicted_speeds,
         })
     }
 }
@@ -485,10 +552,38 @@ static TEST_GRAPH_TILE: LazyLock<OwnedGraphTile> = LazyLock::new(|| {
     OwnedGraphTile::try_from(bytes).expect("Unable to get tile")
 });
 
+/// Test data note: this relies on a binary fixture
+/// where speed info is added to the Andorra tiles using the `valhalla_add_predicted_traffic`
+/// utility.
+///
+/// The contents of the file `0/003/015.csv` used to generate the test fixture are as follows:
+///
+/// ```csv
+/// 0/3015/0,50,40,
+/// 0/3015/42,100,42,BcUACQAEACEADP/7/9sAGf/fAAwAGwARAAX/+AAAAB0AFAAS//AAF//+ACwACQAqAAAAKP/6AEMABABsAAsBBAAq/rcAAP+bAAz/zv/s/9MABf/Y//X/8//9/+wACf/P//EADv/8//L//P/y//H////7AAwAFf/5//oADgAZAAQAFf/3/+8AB//yAB8ABv/0AAUAEf/8//QAFAAG//b////j//v//QAT//7/+f/kABMABwABAAv/6//8//cAEwAAABT/8v/6//wAAAAQ//cACwAFAAT/1//sAAEADAABAAYAE//9AAn/7gAH/+AAFQAB//4AC//o/+gAE//+AAAAFf/l//kABP/+//kACAAG//cAHv/qAB0AAv/4/+v/+wALAAMABP/3AAT/8wAIAAr/9wAK//j/+wAEAAD/+P/8//v/8f/2//L//AALAAcABgAG//gAAv/5AAoAHv//AAcAFf/zABD/7AAUAAv/7v/8AAgACAAN//0ADP/iABD/9f/3//7/+P/3AAQADP//AAMABw==
+/// 0/3015/7,12,34,CKD/4f/r/+H/6//g/+v/4P/q/9//6v/f/+r/3v/q/93/6f/b/+n/2v/o/9f/5//V/+b/0f/l/8z/4//G/+D/vf/d/67/1/+V/8z/Xf+u/nz+GwLJAEcAqwAWAFwABwA8AAAAK//8ACD/+AAZ//YAE//0AA//8gAM//AACf/uAAb/7AAE/+kAAv/m////4v/9/93/+f/U//T/xf/q/5//y/6PAQMAngApADkAFwAfABAAEwAMAAwACQAHAAcAAwAGAAAABf/9AAT/+wAD//kAA//2AAL/9AAC//EAAf/tAAH/6AAA/+EAAP/U////tv///x8AFADL//8AQ///ACf//gAa//4AE//+AA7//QAL//0ACP/9AAb//AAE//wAAv/8AAD/+//+//v//P/6//r/+v/2//n/8v/4/+v/9f/b/+//nP+TALoADAAyAAMAHgAAABX//gAQ//0ADf/9AAv//AAJ//sAB//7AAb/+gAF//kABP/4AAP/9wAC//YAAf/1AAD/8//+//D//P/q//f/2w==
+/// ```
+#[cfg(test)]
+static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<OwnedGraphTile> = LazyLock::new(|| {
+    let relative_path = TEST_GRAPH_TILE_ID
+        .file_path("gph")
+        .expect("Unable to get relative path");
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("andorra-tiles-with-traffic")
+        .join(relative_path);
+    let bytes = std::fs::read(path).expect("Unable to read file");
+
+    OwnedGraphTile::try_from(bytes).expect("Unable to get tile")
+});
+
 #[cfg(test)]
 mod tests {
     use crate::Access;
-    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE, TEST_GRAPH_TILE_ID};
+    use crate::graph_tile::predicted_speeds::BUCKETS_PER_WEEK;
+    use crate::graph_tile::{
+        GraphTile, TEST_GRAPH_TILE, TEST_GRAPH_TILE_ID, TEST_GRAPH_TILE_WITH_FLOW,
+    };
     use enumset::{EnumSet, enum_set};
 
     #[test]
@@ -605,5 +700,102 @@ mod tests {
         }
 
         assert_eq!(other_edge_info.way_id(), 28833880);
+    }
+
+    #[test]
+    fn test_predicted_speed_access_when_absent_in_tile() {
+        let tile = &*TEST_GRAPH_TILE;
+        let tile_view = tile.borrow_dependent();
+
+        // The tile was built without speed information
+        assert_eq!(tile_view.get_predicted_speed(0, 0), None);
+
+        // The index is clearly invalid
+        assert_eq!(tile_view.get_predicted_speed(usize::MAX, 0), None);
+    }
+
+    #[test]
+    fn test_traffic_flow_speeds() {
+        let tile = &*TEST_GRAPH_TILE_WITH_FLOW;
+        let tile_view = tile.borrow_dependent();
+
+        const EDGE_INDEX: usize = 0;
+        let edge = &tile_view.directed_edges()[EDGE_INDEX];
+
+        assert_eq!(edge.free_flow_speed(), 50);
+        assert_eq!(edge.constrained_flow_speed(), 40);
+        assert_eq!(edge.has_predicted_speed(), false);
+
+        // This edge doesn't have any predicted speeds.
+        assert_eq!(tile_view.get_predicted_speed(EDGE_INDEX, 0), None);
+    }
+
+    #[test]
+    fn test_predicted_traffic_speeds() {
+        let tile = &*TEST_GRAPH_TILE_WITH_FLOW;
+        let tile_view = tile.borrow_dependent();
+
+        // We specifically added predicted speeds to this random edge index.
+        // See the test case info in the comment for TEST_GRAPH_TILE_WITH_FLOW.
+        const EDGE_INDEX: usize = 42;
+        let edge = &tile_view.directed_edges()[EDGE_INDEX];
+
+        assert_eq!(edge.free_flow_speed(), 100);
+        assert_eq!(edge.constrained_flow_speed(), 42);
+        assert_eq!(edge.has_predicted_speed(), true);
+
+        // A few predicted speed samples.
+        // See predicted_speeds.rs for the array of speeds that we expected to encode.
+        assert!(
+            tile_view
+                .get_predicted_speed(EDGE_INDEX, 0)
+                .is_some_and(|s| { (s - 36f32).abs() < 0.5 })
+        );
+
+        // 60 * 5 = number of seconds in a 5 minute block. We encode data in 5 min chunks.
+        assert!(
+            tile_view
+                .get_predicted_speed(EDGE_INDEX, 42 * 60 * 5)
+                .is_some_and(|s| { (s - 45f32).abs() < 0.5 })
+        );
+
+        assert!(
+            tile_view
+                .get_predicted_speed(EDGE_INDEX, 20 * 60 * 5)
+                .is_some_and(|s| { (s - 42f32).abs() < 0.5 })
+        );
+
+        // There are 2016 total buckets per week; this indexes into the last one (zero indexed)
+        assert!(
+            tile_view
+                .get_predicted_speed(EDGE_INDEX, 2016 * 60 * 5 - 1)
+                .is_some_and(|s| { (s - 29f32).abs() < 0.5 })
+        );
+    }
+
+    #[test]
+    fn test_predicted_traffic_speeds_second_profile() {
+        let tile = &*TEST_GRAPH_TILE_WITH_FLOW;
+        let tile_view = tile.borrow_dependent();
+
+        // We specifically added predicted speeds to another random edge index.
+        // See the test case info in the comment for TEST_GRAPH_TILE_WITH_FLOW.
+        const EDGE_INDEX: usize = 7;
+        let edge = &tile_view.directed_edges()[EDGE_INDEX];
+
+        assert_eq!(edge.free_flow_speed(), 12);
+        // No, this isn't intended to make sense; it's test data ;)
+        assert_eq!(edge.constrained_flow_speed(), 34);
+        assert_eq!(edge.has_predicted_speed(), true);
+
+        // A few predicted speed samples.
+        // See predicted_speeds.rs for the array of speeds that we expected to encode.
+        let speeds: [i64; BUCKETS_PER_WEEK] = std::array::from_fn(|i| {
+            tile_view
+                .get_predicted_speed(EDGE_INDEX, (i as u32) * 300)
+                .unwrap() as i64
+        });
+
+        insta::assert_yaml_snapshot!(speeds.to_vec());
     }
 }

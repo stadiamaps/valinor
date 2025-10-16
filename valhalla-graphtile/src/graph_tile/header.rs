@@ -162,7 +162,7 @@ pub struct GraphTileHeader {
     _reserved_1: U64<LE>,
     _reserved_2: U64<LE>,
     // TODO: Valhalla has the unhelpful comment "Offset to the beginning of the variable sized data."
-    // We should improve these.
+    // It looks like this would go in GraphTileView for us.
     pub complex_restriction_forward_offset: U32<LE>,
     pub complex_restriction_reverse_offset: U32<LE>,
     pub edge_info_offset: U32<LE>,

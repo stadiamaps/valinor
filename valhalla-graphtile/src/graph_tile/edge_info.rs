@@ -93,7 +93,6 @@ pub struct EdgeInfo<'a> {
     extended_way_id_2: u8,
     extended_way_id_3: u8,
     decoded_shape: OnceCell<LineString<f64>>,
-    // TODO: Final 2 bytes of a 64-bit way ID
     // TODO: Encoded elevation (pointer?)
     text_list_memory: &'a [u8],
     // TODO: Tag cache

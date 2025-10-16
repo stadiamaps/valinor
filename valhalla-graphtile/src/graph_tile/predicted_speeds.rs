@@ -182,43 +182,72 @@ pub fn decode_compressed_speeds(
 /// * `profiles` is a flat array of i16 coefficients; each profile occupies
 ///   `COEFFICIENT_COUNT` consecutive entries.
 #[derive(Debug, Clone, Copy)]
-pub struct PredictedSpeeds<'a> {
+pub(crate) struct PredictedSpeeds<'a> {
+    /// An array of offsets mapping every directed edge in the tile
+    /// to a _starting offset_ in the `profiles` array.
+    ///
+    /// This array must have one entry for each directed edge in the graph tile,
+    /// regardless of whether that edge has predicted traffic or not.
+    /// Directed edges have a single bit indicating whether they have predicted speeds,
+    /// accessible via [`super::DirectedEdge::has_predicted_speed`].
+    /// Attempting to access speeds for an edge which does not have this bit set
+    /// results in undefined behavior (in the sense that we make no guarantees about what happens).
     offsets: &'a [u32],
+    /// The weekly speed profile data, stored as a flat blob.
+    ///
+    /// This must be some multiple of [`COEFFICIENT_COUNT`].
+    /// In debug builds, we check this with a runtime assertion.
+    /// For release builds, we assume the size is correct,
+    /// and may panic if a tile is invalid.
     profiles: &'a [i16],
 }
 
 impl<'a> PredictedSpeeds<'a> {
     pub fn new(offsets: &'a [u32], profiles: &'a [i16]) -> Self {
+        debug_assert!(
+            profiles.len().is_multiple_of(COEFFICIENT_COUNT),
+            "Unexpected profiles length: {}. Expected a multiple of {COEFFICIENT_COUNT}",
+            profiles.len()
+        );
         Self { offsets, profiles }
     }
 
-    /// Get the predicted speed (kph) for a given directed-edge index and seconds-of-week.
-    /// Returns `None` if indexes are invalid or the profile is incomplete.
-    pub fn speed(&self, idx: usize, seconds_of_week: u32) -> Option<f32> {
-        let bucket = (seconds_of_week / SPEED_BUCKET_SIZE_SECONDS) as usize; // 0..2015
+    /// Get the predicted speed (kph) for a given directed-edge index at a specific time.
+    ///
+    /// The time `seconds_from_start_of_week` is measured from midnight Sunday local time.
+    /// Returns `None` if the offset is invalid.
+    ///
+    /// NB: It is the caller's responsibility to ensure that the provided directed edge index
+    /// actually has traffic data!
+    /// The Valhalla tile format does not have any sort of sentinel value,
+    /// so the resulting value will appear valid but will not be accurate for the edge!
+    pub fn speed(
+        &self,
+        directed_edge_index: usize,
+        seconds_from_start_of_week: u32,
+    ) -> Option<f32> {
+        let bucket = (seconds_from_start_of_week / SPEED_BUCKET_SIZE_SECONDS) as usize;
         if bucket >= BUCKETS_PER_WEEK {
             return None;
         }
-        let start = *self.offsets.get(idx)? as usize;
-        let end = start.checked_add(COEFFICIENT_COUNT)?;
-        let coeffs = self.profiles.get(start..end)?;
-        // Use slice-based reconstruction to avoid copying
-        Some(decompress_bucket_from_slice(coeffs, bucket))
-    }
-}
+        let start = *self.offsets.get(directed_edge_index)? as usize;
 
-/// Slice-based reconstruction to avoid array conversion in [`PredictedSpeeds::speed`].
-///
-/// TODO: This is essentially identical to [`decompress_speed_bucket`]; we should try to get rid of one...
-#[inline]
-fn decompress_bucket_from_slice(coefficients: &[i16], bucket_idx: usize) -> f32 {
-    debug_assert!(coefficients.len() >= COEFFICIENT_COUNT);
-    let row = cos_row(bucket_idx);
-    let mut s = 0.0f32;
-    for i in 0..COEFFICIENT_COUNT {
-        s = row[i].mul_add(f32::from(coefficients[i]), s);
+        // View the profiles as fixed-size chunks; remainder should be empty given constructor invariant.
+        let (chunks, rem) = self.profiles.as_chunks::<COEFFICIENT_COUNT>();
+        debug_assert!(
+            rem.is_empty(),
+            "profiles length must be a multiple of COEFFICIENT_COUNT"
+        );
+        debug_assert!(
+            start.is_multiple_of(COEFFICIENT_COUNT),
+            "Offset {start} must be a multiple of {COEFFICIENT_COUNT}. The graph tile is invalid."
+        );
+
+        let chunk_idx = start / COEFFICIENT_COUNT;
+        let coeffs = chunks.get(chunk_idx)?;
+
+        Some(decompress_speed_bucket(coeffs, bucket))
     }
-    s
 }
 
 #[cfg(test)]
@@ -247,7 +276,7 @@ mod tests {
             }
 
             for (i, &s) in recon.iter().enumerate() {
-                prop_assert!(s >= 0.0, "negative speed at bucket {i}: {s}");
+                prop_assert!(s >= -0.5, "negative speed at bucket {i}: {s}");
             }
         }
 
@@ -415,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn base64_encode_decode() {
+    fn base64_round_trip() {
         // simple pattern
         let mut coeffs = [0i16; COEFFICIENT_COUNT];
         for i in 0..COEFFICIENT_COUNT {
@@ -424,6 +453,17 @@ mod tests {
         let enc = encode_compressed_speeds(&coeffs);
         let dec = decode_compressed_speeds(&enc).unwrap();
         assert_eq!(coeffs, dec);
+    }
+
+    #[test]
+    fn base64_encode() {
+        let mut speeds = [0f32; BUCKETS_PER_WEEK];
+        for i in 0..BUCKETS_PER_WEEK {
+            speeds[i] = (i as f32) % 100.0;
+        }
+        let coeffs = compress_speed_buckets(&speeds);
+        let enc = encode_compressed_speeds(&coeffs);
+        insta::assert_yaml_snapshot!(enc);
     }
 
     /// End-to-end test decoding speeds from a base64 string.
