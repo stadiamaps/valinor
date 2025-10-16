@@ -492,7 +492,8 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
 
         let predicted_speeds = if header.predicted_speeds_count() > 0 {
             let predicted_speed_offset = header.predicted_speeds_offset.get() as usize;
-            let (offsets, profile_data) = <[u32]>::ref_from_prefix_with_elems(
+            // Curiously, these seem to actually be unaligned in a Valhalla tile I generated!
+            let (offsets, profile_data) = <[U32<LE>]>::ref_from_prefix_with_elems(
                 &bytes[predicted_speed_offset..],
                 header.directed_edge_count() as usize,
             )
