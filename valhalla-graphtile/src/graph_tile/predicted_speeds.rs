@@ -17,6 +17,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::LazyLock;
 use thiserror::Error;
+use zerocopy::{I16, LE, U32};
 
 /// The size of each interval.
 ///
@@ -192,18 +193,18 @@ pub(crate) struct PredictedSpeeds<'a> {
     /// accessible via [`super::DirectedEdge::has_predicted_speed`].
     /// Attempting to access speeds for an edge which does not have this bit set
     /// results in undefined behavior (in the sense that we make no guarantees about what happens).
-    offsets: &'a [u32],
+    offsets: &'a [U32<LE>],
     /// The weekly speed profile data, stored as a flat blob.
     ///
     /// This must be some multiple of [`COEFFICIENT_COUNT`].
     /// In debug builds, we check this with a runtime assertion.
     /// For release builds, we assume the size is correct,
     /// and may panic if a tile is invalid.
-    profiles: &'a [i16],
+    profiles: &'a [I16<LE>],
 }
 
 impl<'a> PredictedSpeeds<'a> {
-    pub fn new(offsets: &'a [u32], profiles: &'a [i16]) -> Self {
+    pub fn new(offsets: &'a [U32<LE>], profiles: &'a [I16<LE>]) -> Self {
         debug_assert!(
             profiles.len().is_multiple_of(COEFFICIENT_COUNT),
             "Unexpected profiles length: {}. Expected a multiple of {COEFFICIENT_COUNT}",
@@ -230,13 +231,13 @@ impl<'a> PredictedSpeeds<'a> {
         if bucket >= BUCKETS_PER_WEEK {
             return None;
         }
-        let start = *self.offsets.get(directed_edge_index)? as usize;
+        let start = self.offsets.get(directed_edge_index)?.get() as usize;
 
-        // View the profiles as fixed-size chunks; remainder should be empty given constructor invariant.
+        // View the profiles as fixed-size chunks
         let (chunks, rem) = self.profiles.as_chunks::<COEFFICIENT_COUNT>();
         debug_assert!(
             rem.is_empty(),
-            "profiles length must be a multiple of COEFFICIENT_COUNT"
+            "profiles length must be a multiple of COEFFICIENT_COUNT. The graph tile is invalid."
         );
         debug_assert!(
             start.is_multiple_of(COEFFICIENT_COUNT),
@@ -244,20 +245,22 @@ impl<'a> PredictedSpeeds<'a> {
         );
 
         let chunk_idx = start / COEFFICIENT_COUNT;
-        let coeffs = chunks.get(chunk_idx)?;
+        let coeffs = chunks.get(chunk_idx)?.map(|c| c.get());
 
-        Some(decompress_speed_bucket(coeffs, bucket))
+        Some(decompress_speed_bucket(&coeffs, bucket))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::{prop_assert, proptest};
+
+    #[cfg(not(miri))]
+    use proptest::prop_assert;
 
     // Temporarily not run under miri, since the trig ops are REALLY slow
     #[cfg(not(miri))]
-    proptest! {
+    proptest::proptest! {
         /// For arbitrary non-negative weekly speeds, the decoded speeds should not go negative,
         /// allowing a tiny epsilon for floating point jitter.
         #[test]
@@ -456,14 +459,20 @@ mod tests {
     }
 
     #[test]
-    fn base64_encode() {
+    fn test_base64_encode_fixture() {
+        // A random fixture of a looping series.
+        // This has been verified against the original C++ implementation as well
+        // as another random check.
         let mut speeds = [0f32; BUCKETS_PER_WEEK];
         for i in 0..BUCKETS_PER_WEEK {
             speeds[i] = (i as f32) % 100.0;
         }
         let coeffs = compress_speed_buckets(&speeds);
         let enc = encode_compressed_speeds(&coeffs);
-        insta::assert_yaml_snapshot!(enc);
+        assert_eq!(
+            enc,
+            "CKD/4f/r/+H/6//g/+v/4P/q/9//6v/f/+r/3v/q/93/6f/b/+n/2v/o/9f/5//V/+b/0f/l/8z/4//G/+D/vf/d/67/1/+V/8z/Xf+u/nz+GwLJAEcAqwAWAFwABwA8AAAAK//8ACD/+AAZ//YAE//0AA//8gAM//AACf/uAAb/7AAE/+kAAv/m////4v/9/93/+f/U//T/xf/q/5//y/6PAQMAngApADkAFwAfABAAEwAMAAwACQAHAAcAAwAGAAAABf/9AAT/+wAD//kAA//2AAL/9AAC//EAAf/tAAH/6AAA/+EAAP/U////tv///x8AFADL//8AQ///ACf//gAa//4AE//+AA7//QAL//0ACP/9AAb//AAE//wAAv/8AAD/+//+//v//P/6//r/+v/2//n/8v/4/+v/9f/b/+//nP+TALoADAAyAAMAHgAAABX//gAQ//0ADf/9AAv//AAJ//sAB//7AAb/+gAF//kABP/4AAP/9wAC//YAAf/1AAD/8//+//D//P/q//f/2w=="
+        );
     }
 
     /// End-to-end test decoding speeds from a base64 string.
@@ -471,12 +480,13 @@ mod tests {
     fn test_decoding() {
         let encoded_speed = "BcUACQAEACEADP/7/9sAGf/fAAwAGwARAAX/+AAAAB0AFAAS//AAF//+ACwACQAqAAAAKP/6AEMABABsAAsBBAAq/rcAAP+bAAz/zv/s/9MABf/Y//X/8//9/+wACf/P//EADv/8//L//P/y//H////7AAwAFf/5//oADgAZAAQAFf/3/+8AB//yAB8ABv/0AAUAEf/8//QAFAAG//b////j//v//QAT//7/+f/kABMABwABAAv/6//8//cAEwAAABT/8v/6//wAAAAQ//cACwAFAAT/1//sAAEADAABAAYAE//9AAn/7gAH/+AAFQAB//4AC//o/+gAE//+AAAAFf/l//kABP/+//kACAAG//cAHv/qAB0AAv/4/+v/+wALAAMABP/3AAT/8wAIAAr/9wAK//j/+wAEAAD/+P/8//v/8f/2//L//AALAAcABgAG//gAAv/5AAoAHv//AAcAFf/zABD/7AAUAAv/7v/8AAgACAAN//0ADP/iABD/9f/3//7/+P/3AAQADP//AAMABw==";
 
-        let coeffs =
-            decode_compressed_speeds(encoded_speed).expect("Failed to decode coefficients");
+        let coeffs = decode_compressed_speeds(encoded_speed)
+            .expect("Failed to decode coefficients")
+            .map(|c| c.into());
 
         // Build a single-edge profile view
-        let offsets: [u32; 1] = [0];
-        let profiles: Vec<i16> = coeffs.into();
+        let offsets: [U32<LE>; 1] = [0.into()];
+        let profiles: Vec<I16<LE>> = coeffs.into();
 
         let ps = PredictedSpeeds::new(&offsets, &profiles);
 
@@ -571,17 +581,17 @@ mod tests {
             assert_eq!(raw[0] as i8, 1, "First value should be 1");
 
             // Create coefficients by reading big-endian i16 *starting at offset 1*
-            let mut coeffs = [0i16; COEFFICIENT_COUNT];
+            let mut coeffs = [0.into(); COEFFICIENT_COUNT];
             let mut idx = 1usize;
             for i in 0..COEFFICIENT_COUNT {
-                let be = u16::from_be_bytes([raw[idx], raw[idx + 1]]);
-                coeffs[i] = be as i16;
+                let be = i16::from_be_bytes([raw[idx], raw[idx + 1]]);
+                coeffs[i] = be.into();
                 idx += 2;
             }
 
             // Build a single-edge profile view
-            let offsets: [u32; 1] = [0];
-            let profiles: Vec<i16> = coeffs.into();
+            let offsets: [U32<LE>; 1] = [0.into()];
+            let profiles: Vec<I16<LE>> = coeffs.into();
 
             let ps = PredictedSpeeds::new(&offsets, &profiles);
 
@@ -617,16 +627,16 @@ mod tests {
             assert_eq!(raw[0] as i8, 1, "First value should be 1");
 
             // Build coefficients from offset 1 (big-endian)
-            let mut coeffs = [0i16; COEFFICIENT_COUNT];
+            let mut coeffs = [0.into(); COEFFICIENT_COUNT];
             let mut idx = 1usize;
             for i in 0..COEFFICIENT_COUNT {
-                let be = u16::from_be_bytes([raw[idx], raw[idx + 1]]);
-                coeffs[i] = be as i16;
+                let be = i16::from_be_bytes([raw[idx], raw[idx + 1]]);
+                coeffs[i] = be.into();
                 idx += 2;
             }
 
-            let offsets: [u32; 1] = [0];
-            let profiles: Vec<i16> = coeffs.into();
+            let offsets: [U32<LE>; 1] = [0.into()];
+            let profiles: Vec<I16<LE>> = coeffs.into();
             let ps = PredictedSpeeds::new(&offsets, &profiles);
 
             for i in 0..BUCKETS_PER_WEEK {
@@ -643,11 +653,12 @@ mod tests {
         fn negative_speeds_correct_fixture() {
             let encoded_speed = "BG7/9QAQAAL/7gAD//r/+AADAAUAD//3AAcAAf/gAB3/7AALAAf//QAZABgADv//AA0AAv/3/+YABQAKABMABv/y//b//wAL//UAEwAAAAYAFf/3//T//QAAABAAAgAC//r////2AAkABwAJ//MABAADAAL/+gAJ//b/+wANABUAEP/5AAMABwAJ//b/+AAHAAcAAAAG//0AB//5AAz/+QAQAAT/+v//AAwAAP/0AA3/8P/tAAr/8QAT//sACQABAAX/9//4AAH//P/p//L/8wAA//oAEv/8ABMAFf//AAUAAwAa//YAB///AAj/+wAK//kABv/yAA4ABgAO//kAAwAI////9P/uAAf/8//5//3/+f/1//T//QADAA///f/yAAD//wAK////+AACAAcAA//9AAsABwAUAAD//wAE/+8AAgAQAAz/7f/1AAL/+P/+/+0AGP/7AAD/+wAL//r//QAHAAAACgAGAAwABv/4//cABf/3//v//QAM/+wADAAH/+//7f//AAwAEAAKAAX/+g==";
 
-            let coeffs =
-                decode_compressed_speeds(encoded_speed).expect("Failed to decode coefficients");
+            let coeffs = decode_compressed_speeds(encoded_speed)
+                .expect("Failed to decode coefficients")
+                .map(|c| c.into());
 
-            let offsets: [u32; 1] = [0];
-            let profiles: Vec<i16> = coeffs.into();
+            let offsets: [U32<LE>; 1] = [0.into()];
+            let profiles: Vec<I16<LE>> = coeffs.into();
             let ps = PredictedSpeeds::new(&offsets, &profiles);
 
             for i in 0..BUCKETS_PER_WEEK {
