@@ -6,7 +6,7 @@ use thiserror::Error;
 mod directory_tile_provider;
 
 use crate::graph_id::InvalidGraphIdError;
-use crate::graph_tile::{GraphTile, GraphTileError, LookupError, NodeInfo, OwnedGraphTile};
+use crate::graph_tile::{GraphTile, GraphTileError, GraphTileHandle, LookupError, NodeInfo};
 pub use directory_tile_provider::DirectoryTileProvider;
 
 #[derive(Debug, Error)]
@@ -42,7 +42,7 @@ pub trait GraphTileProvider {
     fn get_tile_containing(
         &self,
         graph_id: GraphId,
-    ) -> Result<Rc<OwnedGraphTile>, GraphTileProviderError>;
+    ) -> Result<Rc<GraphTileHandle>, GraphTileProviderError>;
 
     /// Gets the opposing edge and the tile containing it.
     ///
@@ -63,7 +63,7 @@ pub trait GraphTileProvider {
     fn get_opposing_edge(
         &self,
         graph_id: GraphId,
-    ) -> Result<(GraphId, Rc<OwnedGraphTile>), GraphTileProviderError> {
+    ) -> Result<(GraphId, Rc<GraphTileHandle>), GraphTileProviderError> {
         let tile = self.get_tile_containing(graph_id)?;
         let edge = tile.get_directed_edge(graph_id)?;
 

@@ -30,18 +30,18 @@ impl Admin {
 
 #[cfg(test)]
 mod tests {
-    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE};
+    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE_L0};
 
     #[test]
     fn test_parse_admin_count() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
 
         assert_eq!(tile.admins().len(), tile.header().admin_count() as usize);
     }
 
     #[test]
     fn test_parse_admins() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
 
         let country_isos = tile
             .admins()

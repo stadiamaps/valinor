@@ -1,0 +1,239 @@
+---
+source: valhalla-graphtile/src/graph_tile/header.rs
+expression: tile.header()
+---
+GraphTileHeader {
+    bit_field_1: FirstBitfield {
+        graph_id: U64(
+            6099882,
+        ),
+        density: 0,
+        name_quality: 0,
+        speed_quality: 0,
+        exit_quality: 0,
+        has_elevation: 0,
+        has_ext_directed_edge: 0,
+    },
+    base_lon_lat: [
+        F32(
+            1.25,
+        ),
+        F32(
+            42.25,
+        ),
+    ],
+    version: [
+        51,
+        46,
+        53,
+        46,
+        48,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ],
+    dataset_id: U64(
+        12218323114,
+    ),
+    bit_field_2: SecondBitfield {
+        node_count: U32(
+            968,
+        ),
+        directed_edge_count: U32(
+            1985,
+        ),
+        predicted_speeds_count: U32(
+            0,
+        ),
+    },
+    transition_count_bitfield: TransitionCountBitfield {
+        transition_count: U32(
+            230,
+        ),
+    },
+    turn_lane_count_bitfield: TurnLaneCountBitfield {
+        turn_lane_count: U32(
+            0,
+        ),
+    },
+    transit_record_bitfield: TransitRecordBitfield {
+        transfer_count: U16(
+            0,
+        ),
+        departure_count: U32(
+            0,
+        ),
+        stop_count: U16(
+            0,
+        ),
+    },
+    misc_counts_bit_field_one: MiscCountsBitFieldOne {
+        route_count: U16(
+            0,
+        ),
+        schedule_count: U16(
+            0,
+        ),
+        sign_count: U32(
+            0,
+        ),
+    },
+    misc_counts_bit_field_two: MiscCountsBitFieldTwo {
+        access_restriction_count: U32(
+            0,
+        ),
+        admin_count: U16(
+            3,
+        ),
+    },
+    _reserved_1: U64(
+        0,
+    ),
+    _reserved_2: U64(
+        0,
+    ),
+    complex_restriction_forward_offset: U32(
+        141320,
+    ),
+    complex_restriction_reverse_offset: U32(
+        141320,
+    ),
+    edge_info_offset: U32(
+        141320,
+    ),
+    text_list_offset: U32(
+        195100,
+    ),
+    create_date: U32(
+        3930,
+    ),
+    bin_offsets: [
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            5,
+        ),
+        U32(
+            263,
+        ),
+        U32(
+            263,
+        ),
+        U32(
+            263,
+        ),
+        U32(
+            263,
+        ),
+        U32(
+            311,
+        ),
+        U32(
+            1613,
+        ),
+    ],
+    lane_connectivity_offset: U32(
+        196680,
+    ),
+    predicted_speeds_offset: U32(
+        0,
+    ),
+    tile_size: U32(
+        196680,
+    ),
+    _empty_slots: [
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+        U32(
+            0,
+        ),
+    ],
+}

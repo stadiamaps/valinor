@@ -107,11 +107,11 @@ impl Sign {
 
 #[cfg(test)]
 mod tests {
-    use crate::graph_tile::TEST_GRAPH_TILE;
+    use crate::graph_tile::TEST_GRAPH_TILE_L0;
 
     #[test]
     fn test_parse_sign_count() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         assert_eq!(

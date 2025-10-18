@@ -45,11 +45,17 @@ pub enum GraphTileError {
     #[error("Unable to extract a slice of the correct length; the tile data is malformed.")]
     SliceLength,
     #[error("The byte sequence is not valid for this type.")]
-    ValidityError,
+    ByteSequenceValidityError,
     #[error("Invalid graph ID.")]
     GraphIdParseError(#[from] InvalidGraphIdError),
     #[error("Data cast failed (this almost always means invalid data): {0}")]
     CastError(String),
+    #[error(
+        "Expected to have consumed all bytes in the graph tile, but we still have a leftover buffer of {0} bytes. This is either a tile reader implementation error, or the tile is invalid."
+    )]
+    LeftoverBytesAfterReading(usize),
+    #[error("Tile level {0} is not currently supported by Valinor.")]
+    UnsupportedTileLevel(u8),
 }
 
 #[derive(Debug, Error)]
@@ -128,6 +134,10 @@ pub trait GraphTile {
 
     /// Gets edge info for a directed edge.
     ///
+    /// Note that this is NOT a zero-cost operation and involves parsing data
+    /// from various parts of memory such as the text list.
+    /// As such, it is recommended to avoid calling this during costing.
+    ///
     /// # Errors
     ///
     /// Since this accepts a directed edge reference,
@@ -144,17 +154,17 @@ pub trait GraphTile {
 }
 
 self_cell! {
-    /// An owned graph tile.
+    /// A read-only owned view of a graph tile.
     ///
-    /// An owned graph tile can be constructed from an owned byte array, `Vec<u8>`.
-    pub struct OwnedGraphTile {
+    /// This can be constructed from an owned byte array, `Vec<u8>`.
+    pub struct GraphTileHandle {
         owner: Vec<u8>,
         #[covariant]
         dependent: GraphTileView,
     }
 }
 
-impl GraphTile for OwnedGraphTile {
+impl GraphTile for GraphTileHandle {
     #[inline]
     fn graph_id(&self) -> GraphId {
         self.borrow_dependent().graph_id()
@@ -226,11 +236,11 @@ impl GraphTile for OwnedGraphTile {
     }
 }
 
-impl TryFrom<Vec<u8>> for OwnedGraphTile {
+impl TryFrom<Vec<u8>> for GraphTileHandle {
     type Error = GraphTileError;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        OwnedGraphTile::try_new(value, |data| GraphTileView::try_from(data.as_ref()))
+        GraphTileHandle::try_new(value, |data| GraphTileView::try_from(data.as_ref()))
     }
 }
 
@@ -238,7 +248,6 @@ impl TryFrom<Vec<u8>> for OwnedGraphTile {
 ///
 /// Access should normally go through the [``GraphTile``](GraphTile) trait.
 struct GraphTileView<'a> {
-    memory: &'a [u8],
     /// Header with various metadata about the tile and internal sizes.
     header: GraphTileHeader,
     /// The list of nodes in the graph tile.
@@ -256,11 +265,14 @@ struct GraphTileView<'a> {
     signs: &'a [Sign],
     turn_lanes: &'a [TurnLane],
     admins: &'a [Admin],
-    edge_bins: GraphId,
-    // TODO: Complex forward restrictions
-    // TODO: Complex reverse restrictions
-    // TODO: Street names (names here)
-    // TODO: Lane connectivity
+    edge_bins: Vec<GraphId>,
+    complex_forward_restrictions_memory: &'a [u8],
+    complex_reverse_restrictions_memory: &'a [u8],
+    // Variable length byte arrays (indexed into at various other points; hidden with public safe accessors)...
+    // These are all slices which DO have a known size at runtime, but not at compile time.
+    edge_info_memory: &'a [u8],
+    text_memory: &'a [u8],
+    lane_connectivity_memory: &'a [u8],
     predicted_speeds: Option<PredictedSpeeds<'a>>,
     // TODO: Stop one stops(?)
     // TODO: Route one stops(?)
@@ -368,17 +380,9 @@ impl GraphTile for GraphTileView<'_> {
     }
 
     fn get_edge_info(&self, directed_edge: &DirectedEdge) -> Result<EdgeInfo<'_>, GraphTileError> {
-        let edge_info_start = self.header.edge_info_offset.get() as usize;
         let edge_info_offset = directed_edge.edge_info_offset() as usize;
 
-        // TODO: Text slice as a separate property or a function?
-        let text_start = self.header.text_list_offset.get() as usize;
-        let text_size = self.header.lane_connectivity_offset.get() as usize - text_start;
-
-        EdgeInfo::try_from((
-            &self.memory[edge_info_start + edge_info_offset..],
-            &self.memory[text_start..text_start + text_size],
-        ))
+        EdgeInfo::try_from((&self.edge_info_memory[edge_info_offset..], self.text_memory))
     }
 
     #[inline]
@@ -401,26 +405,44 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         // Get the byte range of the header so we can transmute it
         const HEADER_SIZE: usize = size_of::<GraphTileHeader>();
 
-        // Immutable reference to the slice which we'll keep re-binding as we go,
-        // consuming the DSTs as we go.
-        let buffer = bytes;
         let header_range = 0..HEADER_SIZE;
 
-        // Header
-        let header_slice: [u8; HEADER_SIZE] = buffer[header_range].try_into()?;
+        // Fixed-size header
+        let header_slice: [u8; HEADER_SIZE] = bytes[header_range].try_into()?;
         let header: GraphTileHeader = transmute!(header_slice);
 
-        // All the variably sized data arrays...
-        // The basic pattern here is to use ref_from_prefix_with_elems to consume a known number of elements
-        // from the byte slice, returning a reference to the tail.
-        // In this way, we don't need to track manual offsets; we just consume the known number of elements
-        // sequentially.
+        let level = header.graph_id().level();
+        if level > 2 {
+            // No transit tile support yet (see the end of this function for some more specific TODOs)
+            return Err(GraphTileError::UnsupportedTileLevel(level));
+        }
 
-        let (nodes, buffer) = <[NodeInfo]>::ref_from_prefix_with_elems(
-            &buffer[HEADER_SIZE..],
-            header.node_count() as usize,
-        )
-        .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+        // All the variably sized data arrays...
+        // The pattern here is to use `ref_from_prefix_with_elems` to consume a known number of elements
+        // from the byte slice, returning a reference to the tail.
+        //
+        // In this way, we don't typically need to track manual offsets;
+        // we just consume the known number of elements sequentially.
+        // This is not *strictly* the same as how Valhalla parses the tile in `GraphTile::Initialize`,
+        // but it is functionally identical.
+        // The only theoretical avenues for breakage is when data order changes (a breaking change anyway!).
+        // All of our size calculations are explicit though (in header.rs),
+        // and the ordering of data sections is explicit in the implementation
+        // (this also doubles as documentation now).
+        //
+        // One helpful side effect of this approach is that we can be certain
+        // that there are no accidentally overlapping borrows!
+        // Additionally, at the end, we can check that we've consumed all bytes,
+        // thus ensuring that we have either mapped every byte or else something is wrong.
+
+        // Immutable reference to the slice which we'll keep re-binding as we go,
+        // consuming the DSTs as we go.
+        let buffer = &bytes[HEADER_SIZE..];
+
+        // Basic features
+        let (nodes, buffer) =
+            <[NodeInfo]>::ref_from_prefix_with_elems(buffer, header.node_count() as usize)
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
         let (transitions, buffer) = <[NodeTransition]>::ref_from_prefix_with_elems(
             buffer,
             header.transition_count() as usize,
@@ -432,6 +454,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
+        // Extended directed edges
         let directed_edge_ext_count = if header.has_ext_directed_edge() {
             header.directed_edge_count() as usize
         } else {
@@ -441,12 +464,14 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             <[DirectedEdgeExt]>::ref_from_prefix_with_elems(buffer, directed_edge_ext_count)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
+        // Access restrictions
         let (access_restrictions, buffer) = <[AccessRestriction]>::ref_from_prefix_with_elems(
             buffer,
             header.access_restriction_count() as usize,
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
+        // Transit features
         let (transit_departures, buffer) = <[TransitDeparture]>::ref_from_prefix_with_elems(
             buffer,
             header.departure_count() as usize,
@@ -472,7 +497,6 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         let (signs, buffer) =
             <[Sign]>::ref_from_prefix_with_elems(buffer, header.sign_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-
         let (turn_lanes, buffer) =
             <[TurnLane]>::ref_from_prefix_with_elems(buffer, header.turn_lane_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
@@ -481,67 +505,96 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             <[Admin]>::ref_from_prefix_with_elems(buffer, header.admin_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let slice: [u8; U64_SIZE] = (&buffer[0..U64_SIZE]).try_into()?;
-        let raw_graph_id: U64<LE> = transmute!(slice);
-        let edge_bins = GraphId::try_from_id(raw_graph_id.get())?;
+        let (edge_bins, buffer) =
+            <[U64<LE>]>::ref_from_prefix_with_elems(buffer, header.edge_bins_size())
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+        let edge_bins = edge_bins
+            .into_iter()
+            .map(|it| GraphId::try_from_id(it.get()))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // TODO: Complex forward restrictions
-        // TODO: Complex reverse restrictions
-        // TODO: Street names (names here)
-        // TODO: Lane connectivity
+        let (complex_forward_restrictions_memory, buffer) =
+            <[u8]>::ref_from_prefix_with_elems(buffer, header.complex_forward_restrictions_size())
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let predicted_speeds = if header.predicted_speeds_count() > 0 {
-            let predicted_speed_offset = header.predicted_speeds_offset.get() as usize;
+        let (complex_reverse_restrictions_memory, buffer) =
+            <[u8]>::ref_from_prefix_with_elems(buffer, header.complex_reverse_restrictions_size())
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+
+        let (edge_info_memory, buffer) =
+            <[u8]>::ref_from_prefix_with_elems(buffer, header.edge_info_size())
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+
+        let (text_memory, buffer) =
+            <[u8]>::ref_from_prefix_with_elems(buffer, header.text_list_size())
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+
+        let (lane_connectivity_memory, buffer) =
+            <[u8]>::ref_from_prefix_with_elems(buffer, header.lane_connectivity_size())
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+
+        let (predicted_speeds, buffer) = if header.predicted_speeds_count() > 0 {
             // Curiously, these seem to actually be unaligned in a Valhalla tile I generated!
             let (offsets, profile_data) = <[U32<LE>]>::ref_from_prefix_with_elems(
-                &bytes[predicted_speed_offset..],
+                buffer,
                 header.directed_edge_count() as usize,
             )
             .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-            let (profiles, _) = <[I16<LE>]>::ref_from_prefix_with_elems(
+            let (profiles, buffer) = <[I16<LE>]>::ref_from_prefix_with_elems(
                 profile_data,
                 header.predicted_speeds_count() as usize * COEFFICIENT_COUNT,
             )
             .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-            Some(PredictedSpeeds::new(offsets, profiles))
+            (Some(PredictedSpeeds::new(offsets, profiles)), buffer)
         } else {
-            None
+            (None, buffer)
         };
 
-        // TODO: Stop one stops(?)
-        // TODO: Route one stops(?)
-        // TODO: Operator one stops(?)
+        // TODO: Transit info
+        // - Stop one stops(?)
+        // - Route one stops(?)
+        // - Operator one stops(?)
 
-        Ok(Self {
-            memory: bytes,
-            header,
-            nodes,
-            transitions,
-            directed_edges,
-            ext_directed_edges,
-            access_restrictions,
-            transit_departures,
-            transit_stops,
-            transit_routes,
-            transit_schedules,
-            transit_transfers,
-            signs,
-            turn_lanes,
-            admins,
-            edge_bins,
-            predicted_speeds,
-        })
+        if buffer.is_empty() {
+            Ok(Self {
+                header,
+                nodes,
+                transitions,
+                directed_edges,
+                ext_directed_edges,
+                access_restrictions,
+                transit_departures,
+                transit_stops,
+                transit_routes,
+                transit_schedules,
+                transit_transfers,
+                signs,
+                turn_lanes,
+                admins,
+                edge_bins,
+                complex_forward_restrictions_memory,
+                complex_reverse_restrictions_memory,
+                edge_info_memory,
+                text_memory,
+                lane_connectivity_memory,
+                predicted_speeds,
+            })
+        } else {
+            Err(GraphTileError::LeftoverBytesAfterReading(buffer.len()))
+        }
     }
 }
 
 #[cfg(test)]
-const TEST_GRAPH_TILE_ID: GraphId = unsafe { GraphId::from_components_unchecked(0, 3015, 0) };
+const TEST_GRAPH_TILE_ID_L0: GraphId = unsafe { GraphId::from_components_unchecked(0, 3015, 0) };
+#[cfg(test)]
+const TEST_GRAPH_TILE_ID_L2: GraphId = unsafe { GraphId::from_components_unchecked(2, 762485, 0) };
 
 #[cfg(test)]
-static TEST_GRAPH_TILE: LazyLock<OwnedGraphTile> = LazyLock::new(|| {
-    let relative_path = TEST_GRAPH_TILE_ID
+static TEST_GRAPH_TILE_L0: LazyLock<GraphTileHandle> = LazyLock::new(|| {
+    let relative_path = TEST_GRAPH_TILE_ID_L0
         .file_path("gph")
         .expect("Unable to get relative path");
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -550,7 +603,21 @@ static TEST_GRAPH_TILE: LazyLock<OwnedGraphTile> = LazyLock::new(|| {
         .join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
-    OwnedGraphTile::try_from(bytes).expect("Unable to get tile")
+    GraphTileHandle::try_from(bytes).expect("Unable to get tile")
+});
+
+#[cfg(test)]
+static TEST_GRAPH_TILE_L2: LazyLock<GraphTileHandle> = LazyLock::new(|| {
+    let relative_path = TEST_GRAPH_TILE_ID_L2
+        .file_path("gph")
+        .expect("Unable to get relative path");
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("andorra-tiles")
+        .join(relative_path);
+    let bytes = std::fs::read(path).expect("Unable to read file");
+
+    GraphTileHandle::try_from(bytes).expect("Unable to get tile")
 });
 
 /// Test data note: this relies on a binary fixture
@@ -565,8 +632,8 @@ static TEST_GRAPH_TILE: LazyLock<OwnedGraphTile> = LazyLock::new(|| {
 /// 0/3015/7,12,34,CKD/4f/r/+H/6//g/+v/4P/q/9//6v/f/+r/3v/q/93/6f/b/+n/2v/o/9f/5//V/+b/0f/l/8z/4//G/+D/vf/d/67/1/+V/8z/Xf+u/nz+GwLJAEcAqwAWAFwABwA8AAAAK//8ACD/+AAZ//YAE//0AA//8gAM//AACf/uAAb/7AAE/+kAAv/m////4v/9/93/+f/U//T/xf/q/5//y/6PAQMAngApADkAFwAfABAAEwAMAAwACQAHAAcAAwAGAAAABf/9AAT/+wAD//kAA//2AAL/9AAC//EAAf/tAAH/6AAA/+EAAP/U////tv///x8AFADL//8AQ///ACf//gAa//4AE//+AA7//QAL//0ACP/9AAb//AAE//wAAv/8AAD/+//+//v//P/6//r/+v/2//n/8v/4/+v/9f/b/+//nP+TALoADAAyAAMAHgAAABX//gAQ//0ADf/9AAv//AAJ//sAB//7AAb/+gAF//kABP/4AAP/9wAC//YAAf/1AAD/8//+//D//P/q//f/2w==
 /// ```
 #[cfg(test)]
-static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<OwnedGraphTile> = LazyLock::new(|| {
-    let relative_path = TEST_GRAPH_TILE_ID
+static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<GraphTileHandle> = LazyLock::new(|| {
+    let relative_path = TEST_GRAPH_TILE_ID_L0
         .file_path("gph")
         .expect("Unable to get relative path");
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -575,7 +642,7 @@ static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<OwnedGraphTile> = LazyLock::new(|| {
         .join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
-    OwnedGraphTile::try_from(bytes).expect("Unable to get tile")
+    GraphTileHandle::try_from(bytes).expect("Unable to get tile")
 });
 
 #[cfg(test)]
@@ -583,17 +650,18 @@ mod tests {
     use crate::Access;
     use crate::graph_tile::predicted_speeds::BUCKETS_PER_WEEK;
     use crate::graph_tile::{
-        GraphTile, TEST_GRAPH_TILE, TEST_GRAPH_TILE_ID, TEST_GRAPH_TILE_WITH_FLOW,
+        GraphTile, TEST_GRAPH_TILE_ID_L0, TEST_GRAPH_TILE_L0, TEST_GRAPH_TILE_L2,
+        TEST_GRAPH_TILE_WITH_FLOW,
     };
     use enumset::{EnumSet, enum_set};
 
     #[test]
     fn test_get_opp_edge_index() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
 
         let edges: Vec<_> = (0..u64::from(tile.header().directed_edge_count()))
             .map(|index| {
-                let edge_id = TEST_GRAPH_TILE_ID
+                let edge_id = TEST_GRAPH_TILE_ID_L0
                     .with_index(index)
                     .expect("Invalid graph ID.");
                 let opp_edge_index = tile
@@ -611,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_get_access_restrictions() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
 
         let mut found_restriction_count = 0;
         let mut found_partial_subset_count = 0;
@@ -652,18 +720,29 @@ mod tests {
 
     #[test]
     fn test_edge_bins() {
-        // TODO: TBH I don't actually understand how this is a valid graph tile. Clearly some black bit magic.
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
+        assert!(
+            tile_view.edge_bins.is_empty(),
+            "The level 0 tile has no edge bins"
+        );
 
-        assert_eq!(tile_view.edge_bins.level(), 0);
-        assert_eq!(tile_view.edge_bins.tile_id(), 0);
-        assert_eq!(tile_view.edge_bins.index(), 32000);
+        let tile = &*TEST_GRAPH_TILE_L2;
+        let tile_view = tile.borrow_dependent();
+        assert!(
+            !tile_view.edge_bins.is_empty(),
+            "The level 2 tile should have edge bins"
+        );
+
+        // insta internally does a fork operation, which is not supported under Miri
+        if !cfg!(miri) {
+            insta::assert_yaml_snapshot!(tile_view.edge_bins);
+        }
     }
 
     #[test]
     fn test_edge_info() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
 
         let first_edge_info = tile
             .get_edge_info(&tile.directed_edges().first().unwrap())
@@ -705,7 +784,7 @@ mod tests {
 
     #[test]
     fn test_predicted_speed_access_when_absent_in_tile() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         // The tile was built without speed information
