@@ -16,7 +16,7 @@ use tracing::warn;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
-use valhalla_graphtile::graph_tile::{DirectedEdge, GraphTile, LookupError, OwnedGraphTile};
+use valhalla_graphtile::graph_tile::{DirectedEdge, GraphTile, GraphTileHandle, LookupError};
 use valhalla_graphtile::tile_hierarchy::STANDARD_LEVELS;
 use valhalla_graphtile::tile_provider::{
     DirectoryTileProvider, GraphTileProvider, GraphTileProviderError,
@@ -241,7 +241,7 @@ fn main() -> anyhow::Result<()> {
 
 fn export_edges_for_tile<W: Write>(
     mut writer: W,
-    tile: Rc<OwnedGraphTile>,
+    tile: Rc<GraphTileHandle>,
     tile_id: GraphId,
     edge_index_offset: usize,
     reader: &DirectoryTileProvider,

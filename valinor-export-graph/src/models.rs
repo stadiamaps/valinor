@@ -1,14 +1,14 @@
 use geo::LineString;
 use serde::Serialize;
 use std::rc::Rc;
-use valhalla_graphtile::graph_tile::{DirectedEdge, EdgeInfo, GraphTile, OwnedGraphTile};
+use valhalla_graphtile::graph_tile::{DirectedEdge, EdgeInfo, GraphTile, GraphTileHandle};
 use valhalla_graphtile::tile_hierarchy::TileLevel;
 use valhalla_graphtile::{GraphId, RoadClass};
 
 // TODO: Do we need this?
 pub struct EdgePointer {
     pub graph_id: GraphId,
-    pub tile: Rc<OwnedGraphTile>,
+    pub tile: Rc<GraphTileHandle>,
 }
 
 impl EdgePointer {

@@ -340,12 +340,12 @@ impl NodeInfo {
 
 #[cfg(test)]
 mod test {
-    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE};
+    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE_L0};
     use enumset::EnumSet;
 
     #[test]
     fn test_parse_nodes_count() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         assert_eq!(tile_view.nodes.len(), tile.header().node_count() as usize);
@@ -353,7 +353,7 @@ mod test {
 
     #[test]
     fn test_parse_nodes() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         // insta internally does a fork operation, which is not supported under Miri
@@ -375,7 +375,7 @@ mod test {
 
     #[test]
     fn test_parse_transitions_count() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         assert_eq!(
@@ -386,7 +386,7 @@ mod test {
 
     #[test]
     fn test_parse_transitions() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         // insta internally does a fork operation, which is not supported under Miri

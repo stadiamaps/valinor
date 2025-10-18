@@ -1,5 +1,5 @@
 use crate::GraphId;
-use crate::graph_tile::OwnedGraphTile;
+use crate::graph_tile::GraphTileHandle;
 use crate::tile_provider::{GraphTileProvider, GraphTileProviderError};
 use lru::LruCache;
 use std::cell::RefCell;
@@ -11,7 +11,7 @@ use std::rc::Rc;
 pub struct DirectoryTileProvider {
     base_directory: PathBuf,
     // TODO: This is SUPER hackish for now...
-    lru_cache: RefCell<LruCache<GraphId, Rc<OwnedGraphTile>>>,
+    lru_cache: RefCell<LruCache<GraphId, Rc<GraphTileHandle>>>,
 }
 
 impl DirectoryTileProvider {
@@ -27,7 +27,7 @@ impl GraphTileProvider for DirectoryTileProvider {
     fn get_tile_containing(
         &self,
         graph_id: GraphId,
-    ) -> Result<Rc<OwnedGraphTile>, GraphTileProviderError> {
+    ) -> Result<Rc<GraphTileHandle>, GraphTileProviderError> {
         // Build up the path from the base directory + tile ID components
         // TODO: Do we want to move the base ID check inside file_path?
         let base_graph_id = graph_id.tile_base_id();
@@ -41,7 +41,7 @@ impl GraphTileProvider for DirectoryTileProvider {
                     ErrorKind::NotFound => GraphTileProviderError::TileDoesNotExist,
                     _ => GraphTileProviderError::IoError(e),
                 })?;
-                let tile = OwnedGraphTile::try_from(data)?;
+                let tile = GraphTileHandle::try_from(data)?;
                 Ok::<_, GraphTileProviderError>(Rc::new(tile))
             })
             .cloned()?;

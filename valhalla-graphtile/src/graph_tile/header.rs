@@ -156,26 +156,27 @@ pub struct GraphTileHeader {
     transit_record_bitfield: TransitRecordBitfield,
     misc_counts_bit_field_one: MiscCountsBitFieldOne,
     misc_counts_bit_field_two: MiscCountsBitFieldTwo,
-    /// These can be used for custom information.
-    /// As long as the size of the header and order of the date of the structure doesn't change,
-    /// this should be backward compatible.
+    /// These can be used for custom information while retaining Valhalla compatibility.
+    /// However, you must uphold the following invariants:
+    ///
+    /// - The header size doesn't change.
+    /// - The ordering of *existing* fields in the data structure doesn't change.
     _reserved_1: U64<LE>,
     _reserved_2: U64<LE>,
-    // TODO: Valhalla has the unhelpful comment "Offset to the beginning of the variable sized data."
-    // It looks like this would go in GraphTileView for us.
-    pub complex_restriction_forward_offset: U32<LE>,
-    pub complex_restriction_reverse_offset: U32<LE>,
-    pub edge_info_offset: U32<LE>,
-    pub text_list_offset: U32<LE>,
+    // Internal offsets that help us size the variable length data fields.
+    complex_restriction_forward_offset: U32<LE>,
+    complex_restriction_reverse_offset: U32<LE>,
+    edge_info_offset: U32<LE>,
+    text_list_offset: U32<LE>,
     /// The date the tile was created (since pivot date).
     /// TODO: Figure out what pivot date means; probably hide the raw value
     pub create_date: U32<LE>,
     /// Offsets for each bin of the grid (for search/lookup)
-    pub bin_offsets: [U32<LE>; BIN_COUNT],
+    bin_offsets: [U32<LE>; BIN_COUNT],
     /// Offset to the beginning of the variable sized data.
-    pub lane_connectivity_offset: U32<LE>,
+    lane_connectivity_offset: U32<LE>,
     /// Offset to the beginning of the variable sized data.
-    pub predicted_speeds_offset: U32<LE>,
+    predicted_speeds_offset: U32<LE>,
     /// The size of the tile (in bytes)
     pub tile_size: U32<LE>,
     /// See valhalla/balder/graphtileheader.h for details.
@@ -316,15 +317,70 @@ impl GraphTileHeader {
     pub const fn admin_count(&self) -> u16 {
         self.misc_counts_bit_field_two.admin_count().get()
     }
+
+    // These size calculation helpers avoid exposing the raw offsets.
+    // The calculations come from graphtile.cc, where they do the same math in `GraphTile::Initialize`
+    // directly.
+
+    /// The size (in bytes) occupied by the edge bins structure.
+    #[inline]
+    pub const fn edge_bins_size(&self) -> usize {
+        self.bin_offsets[BIN_COUNT - 1].get() as usize
+    }
+
+    /// The size (in bytes) occupied by the complex forward restrictions.
+    #[inline]
+    pub const fn complex_forward_restrictions_size(&self) -> usize {
+        (self.complex_restriction_reverse_offset.get()
+            - self.complex_restriction_forward_offset.get()) as usize
+    }
+
+    /// The size (in bytes) occupied by the complex reverse restrictions.
+    #[inline]
+    pub const fn complex_reverse_restrictions_size(&self) -> usize {
+        (self.edge_info_offset.get() - self.complex_restriction_reverse_offset.get()) as usize
+    }
+
+    /// The size (in bytes) occupied by the edge info data structure.
+    #[inline]
+    pub const fn edge_info_size(&self) -> usize {
+        (self.text_list_offset.get() - self.edge_info_offset.get()) as usize
+    }
+
+    /// The size (in bytes) occupied by the text list.
+    #[inline]
+    pub const fn text_list_size(&self) -> usize {
+        (self.lane_connectivity_offset.get() - self.text_list_offset.get()) as usize
+    }
+
+    /// The size (in bytes) occupied by the lane connectivity data.
+    #[inline]
+    pub const fn lane_connectivity_size(&self) -> usize {
+        if self.predicted_speeds_count() > 0 {
+            (self.predicted_speeds_offset.get() - self.lane_connectivity_offset.get()) as usize
+        } else {
+            (self.tile_size.get() - self.lane_connectivity_offset.get()) as usize
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE};
+    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE_L0, TEST_GRAPH_TILE_L2};
 
     #[test]
     fn test_parse_header() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
+
+        // insta internally does a fork operation, which is not supported under Miri
+        if !cfg!(miri) {
+            insta::assert_debug_snapshot!(tile.header());
+        }
+    }
+
+    #[test]
+    fn test_parse_header_L2() {
+        let tile = &*TEST_GRAPH_TILE_L2;
 
         // insta internally does a fork operation, which is not supported under Miri
         if !cfg!(miri) {

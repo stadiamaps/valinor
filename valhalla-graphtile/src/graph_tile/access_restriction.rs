@@ -96,12 +96,12 @@ impl AccessRestriction {
 #[cfg(test)]
 mod tests {
     use super::{Access, AccessRestrictionType};
-    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE};
+    use crate::graph_tile::{GraphTile, TEST_GRAPH_TILE_L0};
     use enumset::EnumSet;
 
     #[test]
     fn test_parse_access_restrictions_count() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         assert_eq!(
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_parse_access_restrictions() {
-        let tile = &*TEST_GRAPH_TILE;
+        let tile = &*TEST_GRAPH_TILE_L0;
         let tile_view = tile.borrow_dependent();
 
         // insta internally does a fork operation, which is not supported under Miri
