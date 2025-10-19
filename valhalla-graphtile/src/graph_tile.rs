@@ -396,12 +396,10 @@ impl GraphTile for GraphTileView<'_> {
     }
 }
 
-// TODO: Feels like this could be a macro
 impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
     type Error = GraphTileError;
 
     fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
-        const U64_SIZE: usize = size_of::<u64>();
         // Get the byte range of the header so we can transmute it
         const HEADER_SIZE: usize = size_of::<GraphTileHeader>();
 
@@ -435,21 +433,21 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         // Additionally, at the end, we can check that we've consumed all bytes,
         // thus ensuring that we have either mapped every byte or else something is wrong.
 
-        // Immutable reference to the slice which we'll keep re-binding as we go,
+        // Reference to the slice which we'll keep re-binding as we go,
         // consuming the DSTs as we go.
-        let buffer = &bytes[HEADER_SIZE..];
+        let bytes = &bytes[HEADER_SIZE..];
 
         // Basic features
-        let (nodes, buffer) =
-            <[NodeInfo]>::ref_from_prefix_with_elems(buffer, header.node_count() as usize)
+        let (nodes, bytes) =
+            <[NodeInfo]>::ref_from_prefix_with_elems(bytes, header.node_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-        let (transitions, buffer) = <[NodeTransition]>::ref_from_prefix_with_elems(
-            buffer,
+        let (transitions, bytes) = <[NodeTransition]>::ref_from_prefix_with_elems(
+            bytes,
             header.transition_count() as usize,
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-        let (directed_edges, buffer) = <[DirectedEdge]>::ref_from_prefix_with_elems(
-            buffer,
+        let (directed_edges, bytes) = <[DirectedEdge]>::ref_from_prefix_with_elems(
+            bytes,
             header.directed_edge_count() as usize,
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
@@ -460,96 +458,96 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         } else {
             0
         };
-        let (ext_directed_edges, buffer) =
-            <[DirectedEdgeExt]>::ref_from_prefix_with_elems(buffer, directed_edge_ext_count)
+        let (ext_directed_edges, bytes) =
+            <[DirectedEdgeExt]>::ref_from_prefix_with_elems(bytes, directed_edge_ext_count)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
         // Access restrictions
-        let (access_restrictions, buffer) = <[AccessRestriction]>::ref_from_prefix_with_elems(
-            buffer,
+        let (access_restrictions, bytes) = <[AccessRestriction]>::ref_from_prefix_with_elems(
+            bytes,
             header.access_restriction_count() as usize,
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
         // Transit features
-        let (transit_departures, buffer) = <[TransitDeparture]>::ref_from_prefix_with_elems(
-            buffer,
+        let (transit_departures, bytes) = <[TransitDeparture]>::ref_from_prefix_with_elems(
+            bytes,
             header.departure_count() as usize,
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-        let (transit_stops, buffer) =
-            <[TransitStop]>::ref_from_prefix_with_elems(buffer, header.stop_count() as usize)
+        let (transit_stops, bytes) =
+            <[TransitStop]>::ref_from_prefix_with_elems(bytes, header.stop_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-        let (transit_routes, buffer) =
-            <[TransitRoute]>::ref_from_prefix_with_elems(buffer, header.route_count() as usize)
+        let (transit_routes, bytes) =
+            <[TransitRoute]>::ref_from_prefix_with_elems(bytes, header.route_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-        let (transit_schedules, buffer) = <[TransitSchedule]>::ref_from_prefix_with_elems(
-            buffer,
+        let (transit_schedules, bytes) = <[TransitSchedule]>::ref_from_prefix_with_elems(
+            bytes,
             header.schedule_count() as usize,
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-        let (transit_transfers, buffer) = <[TransitTransfer]>::ref_from_prefix_with_elems(
-            buffer,
+        let (transit_transfers, bytes) = <[TransitTransfer]>::ref_from_prefix_with_elems(
+            bytes,
             header.transfer_count() as usize,
         )
         .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let (signs, buffer) =
-            <[Sign]>::ref_from_prefix_with_elems(buffer, header.sign_count() as usize)
+        let (signs, bytes) =
+            <[Sign]>::ref_from_prefix_with_elems(bytes, header.sign_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-        let (turn_lanes, buffer) =
-            <[TurnLane]>::ref_from_prefix_with_elems(buffer, header.turn_lane_count() as usize)
-                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
-
-        let (admins, buffer) =
-            <[Admin]>::ref_from_prefix_with_elems(buffer, header.admin_count() as usize)
+        let (turn_lanes, bytes) =
+            <[TurnLane]>::ref_from_prefix_with_elems(bytes, header.turn_lane_count() as usize)
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let (edge_bins, buffer) =
-            <[U64<LE>]>::ref_from_prefix_with_elems(buffer, header.edge_bins_size())
+        let (admins, bytes) =
+            <[Admin]>::ref_from_prefix_with_elems(bytes, header.admin_count() as usize)
+                .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+
+        let (edge_bins, bytes) =
+            <[U64<LE>]>::ref_from_prefix_with_elems(bytes, header.edge_bins_size())
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
         let edge_bins = edge_bins
             .into_iter()
             .map(|it| GraphId::try_from_id(it.get()))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let (complex_forward_restrictions_memory, buffer) =
-            <[u8]>::ref_from_prefix_with_elems(buffer, header.complex_forward_restrictions_size())
+        let (complex_forward_restrictions_memory, bytes) =
+            <[u8]>::ref_from_prefix_with_elems(bytes, header.complex_forward_restrictions_size())
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let (complex_reverse_restrictions_memory, buffer) =
-            <[u8]>::ref_from_prefix_with_elems(buffer, header.complex_reverse_restrictions_size())
+        let (complex_reverse_restrictions_memory, bytes) =
+            <[u8]>::ref_from_prefix_with_elems(bytes, header.complex_reverse_restrictions_size())
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let (edge_info_memory, buffer) =
-            <[u8]>::ref_from_prefix_with_elems(buffer, header.edge_info_size())
+        let (edge_info_memory, bytes) =
+            <[u8]>::ref_from_prefix_with_elems(bytes, header.edge_info_size())
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let (text_memory, buffer) =
-            <[u8]>::ref_from_prefix_with_elems(buffer, header.text_list_size())
+        let (text_memory, bytes) =
+            <[u8]>::ref_from_prefix_with_elems(bytes, header.text_list_size())
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let (lane_connectivity_memory, buffer) =
-            <[u8]>::ref_from_prefix_with_elems(buffer, header.lane_connectivity_size())
+        let (lane_connectivity_memory, bytes) =
+            <[u8]>::ref_from_prefix_with_elems(bytes, header.lane_connectivity_size())
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-        let (predicted_speeds, buffer) = if header.predicted_speeds_count() > 0 {
+        let (predicted_speeds, bytes) = if header.predicted_speeds_count() > 0 {
             // Curiously, these seem to actually be unaligned in a Valhalla tile I generated!
             let (offsets, profile_data) = <[U32<LE>]>::ref_from_prefix_with_elems(
-                buffer,
+                bytes,
                 header.directed_edge_count() as usize,
             )
             .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-            let (profiles, buffer) = <[I16<LE>]>::ref_from_prefix_with_elems(
+            let (profiles, bytes) = <[I16<LE>]>::ref_from_prefix_with_elems(
                 profile_data,
                 header.predicted_speeds_count() as usize * COEFFICIENT_COUNT,
             )
             .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
-            (Some(PredictedSpeeds::new(offsets, profiles)), buffer)
+            (Some(PredictedSpeeds::new(offsets, profiles)), bytes)
         } else {
-            (None, buffer)
+            (None, bytes)
         };
 
         // TODO: Transit info
@@ -557,7 +555,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         // - Route one stops(?)
         // - Operator one stops(?)
 
-        if buffer.is_empty() {
+        if bytes.is_empty() {
             Ok(Self {
                 header,
                 nodes,
@@ -582,7 +580,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
                 predicted_speeds,
             })
         } else {
-            Err(GraphTileError::LeftoverBytesAfterReading(buffer.len()))
+            Err(GraphTileError::LeftoverBytesAfterReading(bytes.len()))
         }
     }
 }
