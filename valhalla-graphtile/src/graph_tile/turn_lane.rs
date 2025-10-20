@@ -1,13 +1,13 @@
 use bitfield_struct::bitfield;
 use zerocopy::{LE, U32};
-use zerocopy_derive::{FromBytes, Immutable, Unaligned};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
 #[bitfield(u32,
     repr = U32<LE>,
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct EdgeIndex {
     #[bits(22, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     edge_index: U32<LE>,
@@ -15,7 +15,7 @@ struct EdgeIndex {
     _spare: U16<LE>,
 }
 
-#[derive(FromBytes, Immutable, Unaligned, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct TurnLane {
     edge_index: EdgeIndex,

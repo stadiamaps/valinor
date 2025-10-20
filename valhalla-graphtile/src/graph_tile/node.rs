@@ -3,7 +3,7 @@ use bitfield_struct::bitfield;
 use enumset::EnumSet;
 use geo::{Coord, coord};
 use zerocopy::{LE, U16, U32, U64};
-use zerocopy_derive::{FromBytes, Immutable, Unaligned};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
 const NODE_ELEVATION_PRECISION: f32 = 0.25;
 const MIN_ELEVATION: f32 = -500.0;
@@ -16,7 +16,7 @@ const HEADING_EXPAND_FACTOR: f32 = 359f32 / 255f32;
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct FirstBitfield {
     #[bits(22, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     lat_offset: U32<LE>,
@@ -35,7 +35,7 @@ struct FirstBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct SecondBitfield {
     #[bits(21, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     edge_index: U32<LE>,
@@ -66,7 +66,7 @@ struct SecondBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct ThirdBitfield {
     #[bits(21, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     transition_index: U32<LE>,
@@ -100,7 +100,7 @@ struct ThirdBitfield {
 /// The graph uses a forward star structure,
 /// where nodes point to the first outbound directed edge,
 /// and each directed edge points to the other end node of the edge.
-#[derive(FromBytes, Immutable, Unaligned, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct NodeInfo {
     first_bit_field: FirstBitfield,
@@ -124,7 +124,7 @@ pub struct NodeInfo {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 pub struct NodeTransition {
     #[bits(46, from = bit_twiddling_helpers::conv_u64le::from_inner, into = bit_twiddling_helpers::conv_u64le::into_inner)]
     end_node_id: U64<LE>,

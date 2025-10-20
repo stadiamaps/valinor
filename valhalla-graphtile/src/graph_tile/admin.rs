@@ -1,9 +1,9 @@
 use crate::AsCowStr;
 use std::borrow::Cow;
 use zerocopy::{LE, U32};
-use zerocopy_derive::{FromBytes, Immutable, Unaligned};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
-#[derive(FromBytes, Immutable, Unaligned, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct Admin {
     /// The offset into the graph tile text list for the country name.

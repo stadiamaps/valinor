@@ -3,7 +3,7 @@ use bitfield_struct::bitfield;
 use geo::{Coord, coord};
 use std::borrow::Cow;
 use zerocopy::{F32, LE, U16, U32, U64};
-use zerocopy_derive::{FromBytes, Immutable, Unaligned};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
 /// Remaining variable offset slots for growth.
 /// See valhalla/balder/graphtileheader.h for details.
@@ -14,7 +14,7 @@ const EMPTY_SLOTS: usize = 11;
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct FirstBitfield {
     #[bits(46, from = bit_twiddling_helpers::conv_u64le::from_inner, into = bit_twiddling_helpers::conv_u64le::into_inner)]
     graph_id: U64<LE>,
@@ -41,7 +41,7 @@ struct FirstBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct SecondBitfield {
     #[bits(21, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     node_count: U32<LE>,
@@ -62,7 +62,7 @@ struct SecondBitfield {
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct TransitionCountBitfield {
     #[bits(22, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     transition_count: U32<LE>,
@@ -76,7 +76,7 @@ struct TransitionCountBitfield {
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct TurnLaneCountBitfield {
     #[bits(21, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     turn_lane_count: U32<LE>,
@@ -89,7 +89,7 @@ struct TurnLaneCountBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct TransitRecordBitfield {
     #[bits(16, from = bit_twiddling_helpers::conv_u16le::from_inner, into = bit_twiddling_helpers::conv_u16le::into_inner)]
     transfer_count: U16<LE>,
@@ -108,7 +108,7 @@ struct TransitRecordBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct MiscCountsBitFieldOne {
     #[bits(12, from = bit_twiddling_helpers::conv_u16le::from_inner, into = bit_twiddling_helpers::conv_u16le::into_inner)]
     route_count: U16<LE>,
@@ -125,7 +125,7 @@ struct MiscCountsBitFieldOne {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct MiscCountsBitFieldTwo {
     #[bits(24, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     access_restriction_count: U32<LE>,
@@ -142,7 +142,7 @@ struct MiscCountsBitFieldTwo {
 /// This contains metadata like version,
 /// number of nodes and edges,
 /// and pointer offsets to other data.
-#[derive(Copy, Clone, FromBytes, Immutable, Unaligned, Debug)]
+#[derive(Copy, Clone, FromBytes, IntoBytes, Immutable, Unaligned, Debug)]
 #[repr(C)]
 pub struct GraphTileHeader {
     bit_field_1: FirstBitfield,

@@ -1,6 +1,6 @@
 use bitfield_struct::bitfield;
 use zerocopy::{LE, U32};
-use zerocopy_derive::{FromBytes, Immutable, TryFromBytes, Unaligned};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, TryFromBytes, Unaligned};
 
 /// Holds a generic sign with type and text.
 ///
@@ -54,7 +54,7 @@ impl SignType {
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct SignBitField {
     #[bits(22, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     edge_or_node_index: U32<LE>,
@@ -66,7 +66,7 @@ struct SignBitField {
     is_text_tagged: u8,
 }
 
-#[derive(FromBytes, Immutable, Unaligned, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct Sign {
     bitfield: SignBitField,

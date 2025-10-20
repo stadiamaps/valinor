@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use thiserror::Error;
+use zerocopy_derive::{Immutable, IntoBytes};
 
 /// The max valid hierarchy level.
 ///
@@ -66,7 +67,7 @@ pub enum InvalidGraphIdError {
 ///```
 ///
 /// Note that there are only 46 used bits in the scheme (ask Valhalla's authors why 46).
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(IntoBytes, Immutable, Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct GraphId(u64);
 

@@ -25,3 +25,18 @@ Here are a few things that we think are worth exploring:
 * Simplifying the process of building Valhalla microservices
 
 If you're interested to collaborate, please get in touch!
+
+## Building the project
+
+If you check out the repo and build with cargo, all should "just work."
+However, it's more likely than not that you'd like to use this in a library.
+At the moment, we rely on an unstable feature of zerocopy due to underspecified behavior of bit copies of unions.
+See [this discussion](https://github.com/google/zerocopy/discussions/1802) for details.
+
+TL;DR, you'll need to set a config flag.
+We do it like this in `.cargo/config.toml`:
+
+```toml
+[build]
+rustflags = ["--cfg", "zerocopy_derive_union_into_bytes"]
+```

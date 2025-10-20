@@ -2,7 +2,7 @@ use crate::Access;
 use bitfield_struct::bitfield;
 use enumset::EnumSet;
 use zerocopy::{LE, U16, U32, U64};
-use zerocopy_derive::{FromBytes, Immutable, TryFromBytes, Unaligned};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, TryFromBytes, Unaligned};
 
 /// Types of access restrictions.
 #[derive(TryFromBytes, Debug, Eq, PartialEq)]
@@ -51,7 +51,7 @@ impl AccessRestrictionType {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(PartialEq, Eq, FromBytes, Immutable, Unaligned)]
+#[derive(PartialEq, Eq, FromBytes, IntoBytes, Immutable, Unaligned)]
 struct AccessRestrictionBitField {
     #[bits(22, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     edge_index: U32<LE>,
@@ -64,7 +64,7 @@ struct AccessRestrictionBitField {
 }
 
 /// Access restrictions beyond the usual access tags
-#[derive(PartialEq, Eq, FromBytes, Immutable, Unaligned, Debug)]
+#[derive(PartialEq, Eq, FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct AccessRestriction {
     bitfield: AccessRestrictionBitField,

@@ -5,14 +5,14 @@ use enumset::EnumSet;
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use std::fmt::{Debug, Formatter};
 use zerocopy::{LE, U16, U32, U64};
-use zerocopy_derive::{FromBytes, Immutable, Unaligned};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
 #[bitfield(u64,
     repr = U64<LE>,
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct FirstBitfield {
     #[bits(46, from = bit_twiddling_helpers::conv_u64le::from_inner, into = bit_twiddling_helpers::conv_u64le::into_inner)]
     end_node: U64<LE>,
@@ -35,7 +35,7 @@ struct FirstBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct SecondBitfield {
     #[bits(25, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     edge_info_offset: U32<LE>,
@@ -60,7 +60,7 @@ struct SecondBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct ThirdBitfield {
     #[bits(8)]
     speed: u8,
@@ -99,7 +99,7 @@ struct ThirdBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct FourthBitfield {
     #[bits(12, from = bit_twiddling_helpers::conv_u16le::from_inner, into = bit_twiddling_helpers::conv_u16le::into_inner)]
     forward_access: U16<LE>,
@@ -168,7 +168,7 @@ struct FourthBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct FifthBitfield {
     #[bits(24, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     turn_type: U32<LE>,
@@ -187,7 +187,7 @@ struct FifthBitfield {
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct StopImpact {
     #[bits(24, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     impact_between_edges: U32<LE>,
@@ -199,7 +199,7 @@ struct StopImpact {
 /// Since transit lines are schedule-based, they have no need for edge transition logic,
 /// so we can freely share this field.
 #[repr(C)]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Copy, Clone)]
 union StopOrLine {
     stop_impact: StopImpact,
     line_id: U32<LE>,
@@ -210,7 +210,7 @@ union StopOrLine {
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
 struct SeventhBitField {
     #[bits(7)]
     local_level_edge_index: u8,
@@ -247,7 +247,7 @@ impl Debug for StopOrLine {
 /// Additional details can be found in the [`EdgeInfo`](super::EdgeInfo) struct,
 /// which contains things like the encoded shape, OSM way ID,
 /// and other info that is not necessary for making routing decisions.
-#[derive(FromBytes, Immutable, Unaligned, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct DirectedEdge {
     first_bitfield: FirstBitfield,
@@ -520,11 +520,9 @@ impl Serialize for DirectedEdge {
 
 /// Extended directed edge attributes.
 ///
-/// This structure provides the ability to add extra
-/// attributes to directed edges without breaking backward compatibility.
-/// For now this structure is unused
+/// This is extra space to add directed edge attributes without breaking backward compatibility.
 #[repr(C)]
-#[derive(FromBytes, Immutable, Unaligned, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 pub struct DirectedEdgeExt(U64<LE>);
 
 #[cfg(test)]

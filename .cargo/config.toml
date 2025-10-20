@@ -1,3 +1,6 @@
+[build]
+rustflags = ["--cfg", "zerocopy_derive_union_into_bytes"]
+
 [target.s390x-unknown-linux-gnu]
 # Use the GNU cross-linker for s390x on Ubuntu runners
 linker = "s390x-linux-gnu-gcc"
@@ -6,3 +9,4 @@ linker = "s390x-linux-gnu-gcc"
 # qemu-s390x-static is provided by the qemu-user-static package
 # The -L path points to the s390x sysroot installed by libc6-*-s390x-cross
 runner = "qemu-s390x-static -L /usr/s390x-linux-gnu"
+

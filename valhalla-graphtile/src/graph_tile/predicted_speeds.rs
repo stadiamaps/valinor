@@ -249,6 +249,14 @@ impl<'a> PredictedSpeeds<'a> {
 
         Some(decompress_speed_bucket(&coeffs, bucket))
     }
+
+    /// Returns the raw borrowed slices for the offsets and profiles (in order).
+    ///
+    /// This is for internal use by the builder, which provides a sane interface
+    /// for creating / manipulating predicted speed data at the edge level.
+    pub(crate) fn as_offsets_and_profiles(&self) -> (&'a [U32<LE>], &'a [I16<LE>]) {
+        (self.offsets, self.profiles)
+    }
 }
 
 #[cfg(test)]
