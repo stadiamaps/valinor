@@ -28,6 +28,7 @@ zerocopy-derive = { workspace = true }
 insta = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
+walkdir = "2.5.0"
 
 [lints]
 workspace = true

@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 
 mod access_restriction;
 mod admin;
+mod builder;
 mod directed_edge;
 mod edge_info;
 mod header;
@@ -30,6 +31,7 @@ pub use crate::{
 };
 pub use access_restriction::{AccessRestriction, AccessRestrictionType};
 pub use admin::Admin;
+pub use builder::GraphTileBuilder;
 pub use directed_edge::{DirectedEdge, DirectedEdgeExt};
 pub use edge_info::EdgeInfo;
 pub use header::GraphTileHeader;
