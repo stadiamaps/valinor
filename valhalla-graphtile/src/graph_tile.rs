@@ -58,6 +58,10 @@ pub enum GraphTileError {
     LeftoverBytesAfterReading(usize),
     #[error("Tile level {0} is not currently supported by Valinor.")]
     UnsupportedTileLevel(u8),
+    #[error(
+        "Unable to cast an integer to another type (usually means data is too large for the type): {0:?}."
+    )]
+    TryFromInt(#[from] std::num::TryFromIntError),
 }
 
 #[derive(Debug, Error)]
@@ -506,7 +510,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
 
         let (edge_bins, bytes) =
-            <[U64<LE>]>::ref_from_prefix_with_elems(bytes, header.edge_bins_size())
+            <[U64<LE>]>::ref_from_prefix_with_elems(bytes, header.edge_bins_count())
                 .map_err(|e| GraphTileError::CastError(e.to_string()))?;
         let edge_bins = edge_bins
             .into_iter()

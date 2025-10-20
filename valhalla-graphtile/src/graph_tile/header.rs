@@ -1,25 +1,44 @@
 use crate::{AsCowStr, BIN_COUNT, GraphId};
 use bitfield_struct::bitfield;
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
 use geo::{Coord, coord};
 use std::borrow::Cow;
 use zerocopy::{F32, LE, U16, U32, U64};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
+mod builder;
+
+pub(super) use builder::GraphTileHeaderBuilder;
+
 /// Remaining variable offset slots for growth.
 /// See valhalla/balder/graphtileheader.h for details.
 const EMPTY_SLOTS: usize = 11;
+
+/// The number of UTF-8 bytes in the fixed size version field.
+pub(crate) const VERSION_LEN: usize = 16;
+
+/// The Valhalla epoch: Midnight Jan 1, 2014, Eastern Standard Time.
+const VALHALLA_EPOCH: DateTime<Utc> = DateTime::<FixedOffset>::from_naive_utc_and_offset(
+    NaiveDateTime::new(
+        NaiveDate::from_ymd_opt(2014, 1, 1).unwrap(),
+        NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),
+    ),
+    FixedOffset::west_opt(5 * 3600).unwrap(),
+)
+.to_utc();
 
 #[bitfield(u64,
     repr = U64<LE>,
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
 struct FirstBitfield {
     #[bits(46, from = bit_twiddling_helpers::conv_u64le::from_inner, into = bit_twiddling_helpers::conv_u64le::into_inner)]
     graph_id: U64<LE>,
     #[bits(4)]
     density: u8,
+    // More relative statistics (0 - 15); name, speed, and exit quality seem unused in Valhalla?
     #[bits(4)]
     name_quality: u8,
     #[bits(4)]
@@ -41,7 +60,7 @@ struct FirstBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
 struct SecondBitfield {
     #[bits(21, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     node_count: U32<LE>,
@@ -62,8 +81,12 @@ struct SecondBitfield {
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
 struct TransitionCountBitfield {
+    /// No, this is not a typo. This bit field has 22 bits.
+    ///
+    /// There can only be twice as many transitions as there are nodes,
+    /// but in practice there are far fewer than this limit.
     #[bits(22, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     transition_count: U32<LE>,
     // Deprecated; scheduled for deletion in v4
@@ -76,7 +99,7 @@ struct TransitionCountBitfield {
     from = bit_twiddling_helpers::conv_u32le::from_inner,
     into = bit_twiddling_helpers::conv_u32le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
 struct TurnLaneCountBitfield {
     #[bits(21, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     turn_lane_count: U32<LE>,
@@ -89,7 +112,7 @@ struct TurnLaneCountBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
 struct TransitRecordBitfield {
     #[bits(16, from = bit_twiddling_helpers::conv_u16le::from_inner, into = bit_twiddling_helpers::conv_u16le::into_inner)]
     transfer_count: U16<LE>,
@@ -108,7 +131,7 @@ struct TransitRecordBitfield {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
 struct MiscCountsBitFieldOne {
     #[bits(12, from = bit_twiddling_helpers::conv_u16le::from_inner, into = bit_twiddling_helpers::conv_u16le::into_inner)]
     route_count: U16<LE>,
@@ -125,7 +148,7 @@ struct MiscCountsBitFieldOne {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
 struct MiscCountsBitFieldTwo {
     #[bits(24, from = bit_twiddling_helpers::conv_u32le::from_inner, into = bit_twiddling_helpers::conv_u32le::into_inner)]
     access_restriction_count: U32<LE>,
@@ -142,12 +165,12 @@ struct MiscCountsBitFieldTwo {
 /// This contains metadata like version,
 /// number of nodes and edges,
 /// and pointer offsets to other data.
-#[derive(Copy, Clone, FromBytes, IntoBytes, Immutable, Unaligned, Debug)]
+#[derive(Copy, Clone, FromBytes, IntoBytes, Immutable, Unaligned, Debug, PartialEq)]
 #[repr(C)]
 pub struct GraphTileHeader {
     bit_field_1: FirstBitfield,
     base_lon_lat: [F32<LE>; 2],
-    version: [u8; 16],
+    pub(super) version: [u8; VERSION_LEN],
     /// The dataset ID (canonically, the last OSM changeset ID).
     pub dataset_id: U64<LE>,
     bit_field_2: SecondBitfield,
@@ -168,11 +191,13 @@ pub struct GraphTileHeader {
     complex_restriction_reverse_offset: U32<LE>,
     edge_info_offset: U32<LE>,
     text_list_offset: U32<LE>,
-    /// The date the tile was created (since pivot date).
-    /// TODO: Figure out what pivot date means; probably hide the raw value
-    pub create_date: U32<LE>,
+    /// The date the tile was created, expressed as the number of days (rounded down)
+    /// since midnight of Jan 1, 2014, Eastern Standard Time.
+    create_date: U32<LE>,
     /// Offsets for each bin of the grid (for search/lookup)
-    bin_offsets: [U32<LE>; BIN_COUNT],
+    ///
+    /// This should eventually be hidden and replaced with friendlier accessors.
+    pub(super) bin_offsets: [U32<LE>; BIN_COUNT],
     /// Offset to the beginning of the variable sized data.
     lane_connectivity_offset: U32<LE>,
     /// Offset to the beginning of the variable sized data.
@@ -198,22 +223,10 @@ impl GraphTileHeader {
         self.bit_field_1.density()
     }
 
-    /// The relative quality of name assignment for this tile (0-15).
+    /// The date this tile was created.
     #[inline]
-    pub const fn name_quality(&self) -> u8 {
-        self.bit_field_1.name_quality()
-    }
-
-    /// The relative quality of speed assignment for this tile (0-15).
-    #[inline]
-    pub const fn speed_quality(&self) -> u8 {
-        self.bit_field_1.speed_quality()
-    }
-
-    /// The relative quality of exit signs for this tile (0-15).
-    #[inline]
-    pub const fn exit_quality(&self) -> u8 {
-        self.bit_field_1.exit_quality()
+    pub fn create_date(&self) -> DateTime<Utc> {
+        VALHALLA_EPOCH + TimeDelta::days(i64::from(self.create_date.get()))
     }
 
     /// Does this tile include elevation data?
@@ -223,6 +236,8 @@ impl GraphTileHeader {
     }
 
     /// Does this tile include extended directed edge attributes?
+    ///
+    /// If true, read one extended directed edge for every regular directed edge.
     #[inline]
     pub const fn has_ext_directed_edge(&self) -> bool {
         self.bit_field_1.has_ext_directed_edge() != 0
@@ -234,7 +249,7 @@ impl GraphTileHeader {
         coord! {x: self.base_lon_lat[0].get(), y: self.base_lon_lat[1].get()}
     }
 
-    /// Gets the version of Baldr used to generate this graph tile.
+    /// Gets the writer version used to generate this graph tile.
     pub fn version(&self) -> Cow<'_, str> {
         self.version.as_cow_str()
     }
@@ -322,9 +337,9 @@ impl GraphTileHeader {
     // The calculations come from graphtile.cc, where they do the same math in `GraphTile::Initialize`
     // directly.
 
-    /// The size (in bytes) occupied by the edge bins structure.
+    /// The size (in units) occupied by the edge bins structure.
     #[inline]
-    pub const fn edge_bins_size(&self) -> usize {
+    pub const fn edge_bins_count(&self) -> usize {
         self.bin_offsets[BIN_COUNT - 1].get() as usize
     }
 
@@ -379,7 +394,7 @@ mod test {
     }
 
     #[test]
-    fn test_parse_header_L2() {
+    fn test_parse_header_l2() {
         let tile = &*TEST_GRAPH_TILE_L2;
 
         // insta internally does a fork operation, which is not supported under Miri
