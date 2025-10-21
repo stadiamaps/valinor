@@ -266,7 +266,7 @@ impl DirectedEdge {
     #[inline]
     pub const fn end_node_id(&self) -> GraphId {
         // Safety: We know the number of bits is limited
-        unsafe { GraphId::from_id_unchecked(self.first_bitfield.end_node().get()) }
+        unsafe { GraphId::from_id_unchecked(self.first_bitfield.end_node()) }
     }
 
     /// Gets the index of the opposing directed edge at the end node of this directed edge.
