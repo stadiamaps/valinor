@@ -66,7 +66,7 @@ struct SignBitField {
     is_text_tagged: u8,
 }
 
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Clone)]
 #[repr(C)]
 pub struct Sign {
     bitfield: SignBitField,

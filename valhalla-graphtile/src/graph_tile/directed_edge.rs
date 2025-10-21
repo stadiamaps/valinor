@@ -247,7 +247,7 @@ impl Debug for StopOrLine {
 /// Additional details can be found in the [`EdgeInfo`](super::EdgeInfo) struct,
 /// which contains things like the encoded shape, OSM way ID,
 /// and other info that is not necessary for making routing decisions.
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Clone)]
 #[repr(C)]
 pub struct DirectedEdge {
     first_bitfield: FirstBitfield,
@@ -522,7 +522,7 @@ impl Serialize for DirectedEdge {
 ///
 /// This is extra space to add directed edge attributes without breaking backward compatibility.
 #[repr(C)]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Clone)]
 pub struct DirectedEdgeExt(U64<LE>);
 
 #[cfg(test)]

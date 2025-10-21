@@ -15,7 +15,7 @@ struct EdgeIndex {
     _spare: U16<LE>,
 }
 
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Clone)]
 #[repr(C)]
 pub struct TurnLane {
     edge_index: EdgeIndex,

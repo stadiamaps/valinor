@@ -182,7 +182,7 @@ pub fn decode_compressed_speeds(
 ///   (in *coefficients*, not bytes) into `profiles`.
 /// * `profiles` is a flat array of i16 coefficients; each profile occupies
 ///   `COEFFICIENT_COUNT` consecutive entries.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct PredictedSpeeds<'a> {
     /// An array of offsets mapping every directed edge in the tile
     /// to a _starting offset_ in the `profiles` array.

@@ -64,7 +64,7 @@ struct AccessRestrictionBitField {
 }
 
 /// Access restrictions beyond the usual access tags
-#[derive(PartialEq, Eq, FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, FromBytes, IntoBytes, Immutable, Unaligned, Debug, Clone)]
 #[repr(C)]
 pub struct AccessRestriction {
     bitfield: AccessRestrictionBitField,

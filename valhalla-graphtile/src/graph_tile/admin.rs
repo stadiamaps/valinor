@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use zerocopy::{LE, U32};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Clone)]
 #[repr(C)]
 pub struct Admin {
     /// The offset into the graph tile text list for the country name.

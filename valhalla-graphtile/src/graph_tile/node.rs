@@ -100,7 +100,7 @@ struct ThirdBitfield {
 /// The graph uses a forward star structure,
 /// where nodes point to the first outbound directed edge,
 /// and each directed edge points to the other end node of the edge.
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Clone)]
 #[repr(C)]
 pub struct NodeInfo {
     first_bit_field: FirstBitfield,
