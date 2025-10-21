@@ -1,11 +1,13 @@
 use super::{
-    AccessRestriction, Admin, DirectedEdge, DirectedEdgeExt, GraphTileError, GraphTileHandle,
+    AccessRestriction, Admin, DirectedEdge, DirectedEdgeExt, GraphTileBuildError, GraphTileHandle,
     GraphTileHeader, GraphTileView, NodeInfo, NodeTransition, Sign, TransitDeparture, TransitRoute,
     TransitSchedule, TransitStop, TransitTransfer, TurnLane,
 };
 use crate::GraphId;
 use crate::graph_tile::header::{GraphTileHeaderBuilder, VERSION_LEN};
-use crate::graph_tile::predicted_speeds::COEFFICIENT_COUNT;
+use crate::graph_tile::predicted_speeds::{
+    BUCKETS_PER_WEEK, COEFFICIENT_COUNT, compress_speed_buckets, decode_compressed_speeds,
+};
 use chrono::{DateTime, Utc};
 use geo::Coord;
 use std::borrow::Cow;
@@ -69,6 +71,7 @@ pub struct GraphTileBuilder<'a> {
     dataset_id: u64,
     sw_corner: Coord<f32>,
     create_date: DateTime<Utc>,
+    // TODO: Remove this eventually. Currently referenced for a few properties like binning which we don't edit yet anyways.
     remove_me_header: GraphTileHeader,
     nodes: Cow<'a, [NodeInfo]>,
     transitions: Cow<'a, [NodeTransition]>,
@@ -120,11 +123,13 @@ impl<'a> From<&'a GraphTileHandle> for GraphTileBuilder<'a> {
             predicted_speeds,
         } = value.borrow_dependent();
 
-        let (predicted_speed_offsets, predicted_speed_profile_memory) =
-            predicted_speeds.map_or(Default::default(), |ps| {
+        let (predicted_speed_offsets, predicted_speed_profile_memory) = match predicted_speeds {
+            Some(ps) => {
                 let (offsets, profiles) = ps.as_offsets_and_profiles();
                 (Cow::Borrowed(offsets), Cow::Borrowed(profiles))
-            });
+            }
+            None => Default::default(),
+        };
 
         GraphTileBuilder {
             writer_version: header.version,
@@ -132,7 +137,7 @@ impl<'a> From<&'a GraphTileHandle> for GraphTileBuilder<'a> {
             dataset_id: header.dataset_id.get(),
             sw_corner: header.sw_corner(),
             create_date: header.create_date(),
-            remove_me_header: *header,
+            remove_me_header: header.clone(),
             nodes: Cow::Borrowed(nodes),
             transitions: Cow::Borrowed(transitions),
             directed_edges: Cow::Borrowed(directed_edges),
@@ -159,12 +164,17 @@ impl<'a> From<&'a GraphTileHandle> for GraphTileBuilder<'a> {
 }
 
 impl GraphTileBuilder<'_> {
-    pub fn with_version(self, version: &str) -> Result<Self, GraphTileError> {
-        let writer_version = writer_version_to_bytes(version).ok_or_else(|| {
-            GraphTileError::CastError(
-                "Illegal version string {version}. Must be <= 16 bytes in UTF-8".to_string(),
-            )
-        })?;
+    /// Sets the version string to encode in the graph tile.
+    ///
+    /// This is purely metadata and is not used by Valhalla to determine compatibility.
+    ///
+    /// # Errors
+    ///
+    /// The string must be <= 16 bytes when encoded as UTF-8.
+    /// If it is longer, this will return an error.
+    pub fn with_version(self, version: &str) -> Result<Self, GraphTileBuildError> {
+        let writer_version = writer_version_to_bytes(version)
+            .ok_or_else(|| GraphTileBuildError::InvalidVersionString(version.to_string()))?;
 
         Ok(Self {
             writer_version,
@@ -172,8 +182,148 @@ impl GraphTileBuilder<'_> {
         })
     }
 
-    // TODO: Can we make this generic so that it yields an iterator?
-    pub fn to_bytes(&self) -> Result<Vec<u8>, GraphTileError> {
+    /// Adds historical average (coarse granularity) speed information to a directed edge.
+    ///
+    /// Zero indicates that no data is available.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the directed edge index is out of bounds.
+    pub fn with_average_speeds(
+        self,
+        directed_edge_index: usize,
+        free_flow_speed: u8,
+        constrained_speed: u8,
+    ) -> Result<Self, GraphTileBuildError> {
+        let mut result = self;
+        if directed_edge_index >= result.directed_edges.len() {
+            return Err(GraphTileBuildError::InvalidIndex(format!(
+                "Attempted to set historical average speeds for directed edge index {directed_edge_index}, but tile only has {} edges",
+                result.directed_edges.len()
+            )));
+        }
+
+        let edge = &mut result.directed_edges.to_mut()[directed_edge_index];
+        edge.set_free_flow_speed(free_flow_speed);
+        edge.set_constrained_speed(constrained_speed);
+
+        Ok(result)
+    }
+
+    fn with_compressed_speeds(
+        self,
+        directed_edge_index: usize,
+        coefficients: [i16; COEFFICIENT_COUNT],
+    ) -> Result<Self, GraphTileBuildError> {
+        let mut result = self.grow_predicted_speeds_if_needed(true);
+        if directed_edge_index >= result.directed_edges.len() {
+            return Err(GraphTileBuildError::InvalidIndex(format!(
+                "Attempted to set predicted speeds for directed edge index {directed_edge_index}, but tile only has {} edges",
+                result.directed_edges.len()
+            )));
+        }
+
+        // Set the flag indicating that we have predicted speeds for this edge.
+        let edge = &mut result.directed_edges.to_mut()[directed_edge_index];
+        edge.set_has_predicted_speed(true);
+
+        // Add the correct offset into the profiles array.
+        // NOTE: Like Valhalla's built-in historical traffic tooling, we don't currently try to dedupe
+        // speed profiles. This just adds a new one, so we can assign the offset to the *current*
+        // (pre-insertion) length.
+        let predicted_speed_offsets = result.predicted_speed_offsets.to_mut();
+        predicted_speed_offsets[directed_edge_index] =
+            u32::try_from(result.predicted_speed_profile_memory.len())?.into();
+
+        // Add the predicted speeds after encoding them.
+        let predicted_speed_profiles = result.predicted_speed_profile_memory.to_mut();
+        predicted_speed_profiles
+            .extend::<[I16<LE>; COEFFICIENT_COUNT]>(coefficients.map(|coeff| coeff.into()));
+
+        Ok(result)
+    }
+
+    /// Adds predicted speeds to a directed edge from a compressed speed string.
+    ///
+    /// See the [`crate::graph_tile::predicted_speeds`] module for more details
+    /// on predicted speeds.
+    ///
+    /// # Errors
+    ///
+    /// This will fail if the directed edge index is out of bounds,
+    /// the compressed speeds string doesn't decode to exactly 400 bytes,
+    /// or you somehow managed to add more than 2 billion speed profiles to a single tile.
+    pub fn with_predicted_encoded_speeds(
+        self,
+        directed_edge_index: usize,
+        compressed_speeds: &str,
+    ) -> Result<Self, GraphTileBuildError> {
+        self.with_compressed_speeds(
+            directed_edge_index,
+            decode_compressed_speeds(compressed_speeds)?,
+        )
+    }
+
+    /// Adds predicted speeds to a directed edge from a list of samples
+    /// representing evenly spaced intervals throughout a week.
+    ///
+    /// See the [`crate::graph_tile::predicted_speeds`] module for more details
+    /// on predicted speeds.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the directed edge index is invalid,
+    /// or you somehow managed to add more than 2 billion speed profiles to a single tile.
+    pub fn with_predicted_speeds(
+        self,
+        directed_edge_index: usize,
+        speeds: &[f32; BUCKETS_PER_WEEK],
+    ) -> Result<Self, GraphTileBuildError> {
+        self.with_compressed_speeds(directed_edge_index, compress_speed_buckets(speeds))
+    }
+
+    fn grow_predicted_speeds_if_needed(self, force_create_offsets_array: bool) -> Self {
+        assert!(
+            self.predicted_speed_offsets.len() <= self.directed_edges.len(),
+            "There are currently more predicted speeds than directed edges. That's not supposed to happen!"
+        );
+
+        // Don't need to grow unless there are actually speed profiles
+        if !force_create_offsets_array
+            && self.predicted_speed_offsets.is_empty()
+            && self.predicted_speed_profile_memory.is_empty()
+        {
+            return self;
+        }
+
+        let mut result = self;
+        if result.predicted_speed_offsets.len() != result.directed_edges.len() {
+            let predicted_speed_offsets = result.predicted_speed_offsets.to_mut();
+            let delta = result.directed_edges.len() - predicted_speed_offsets.len();
+
+            predicted_speed_offsets.extend(std::iter::repeat_n(U32::<LE>::from(0), delta));
+        }
+
+        result
+    }
+
+
+    /// Serializes the tile as owned bytes.
+    ///
+    /// NOTE: This allocates somewhere on the order of 2x the final tile size while building the tile.
+    ///
+    /// # Errors
+    ///
+    /// Fails if anything is amiss in the tile.
+    /// This should be pretty uncommon, but the following kinds of situations could theoretically
+    /// trigger an error:
+    ///
+    /// * Including than the allowed number of some feature type (e.g. more than 2^24 access restrictions)
+    /// * Managing to create a single tile larger than 4 gigabytes
+    /// * Setting a creation date more than 11,758,979.59 years after January 1, 2014
+    ///
+    /// TL;DR, things that you really shouldn't do, or are a clear programming error.
+    pub fn into_bytes(self) -> Result<Vec<u8>, GraphTileBuildError> {
         const HEADER_SIZE: usize = size_of::<GraphTileHeader>();
         let mut body: Vec<u8> = Vec::new();
 
@@ -240,53 +390,80 @@ impl GraphTileBuilder<'_> {
                 .iter()
                 .flat_map(|value| value.as_bytes()),
         );
+
+        let intermediate = self.grow_predicted_speeds_if_needed(false);
+        if intermediate.predicted_speed_profile_memory.is_empty() {
+            assert!(
+                intermediate.predicted_speed_offsets.is_empty(),
+                "Expected an empty offset array as there are no speed profiles"
+            );
+        } else {
+            assert_eq!(
+                intermediate.predicted_speed_offsets.len(),
+                intermediate.directed_edges.len(),
+                "Expected to have one predicted speed offset per directed edge"
+            );
+            assert!(
+                intermediate
+                    .predicted_speed_profile_memory
+                    .len()
+                    .is_multiple_of(COEFFICIENT_COUNT),
+                "Expected the speed profile memory size to be some multiple of {COEFFICIENT_COUNT} (this is a bug in the builder)."
+            )
+        }
+
         body.extend(
-            self.predicted_speed_offsets
+            intermediate
+                .predicted_speed_offsets
                 .iter()
                 .flat_map(|value| value.as_bytes()),
         );
         body.extend(
-            self.predicted_speed_profile_memory
+            intermediate
+                .predicted_speed_profile_memory
                 .iter()
                 .flat_map(|value| value.as_bytes()),
         );
 
-        let mut result = Vec::with_capacity(HEADER_SIZE + body.len());
-
-        // TODO: Compute the header instead of slapping in the original
         let header = GraphTileHeaderBuilder {
-            version: self.writer_version,
-            graph_id: self.graph_id,
-            density: self.remove_me_header.density(),
-            has_elevation: self.remove_me_header.has_elevation(),
-            has_ext_directed_edges: !self.ext_directed_edges.is_empty(),
-            sw_corner: self.sw_corner,
-            dataset_id: self.dataset_id,
-            node_count: self.nodes.len(),
-            directed_edge_count: self.directed_edges.len(),
-            predicted_speed_profile_count: self.predicted_speed_profile_memory.len()
+            version: intermediate.writer_version,
+            graph_id: intermediate.graph_id,
+            density: intermediate.remove_me_header.density(),
+            has_elevation: intermediate.remove_me_header.has_elevation(),
+            has_ext_directed_edges: !intermediate.ext_directed_edges.is_empty(),
+            sw_corner: intermediate.sw_corner,
+            dataset_id: intermediate.dataset_id,
+            node_count: intermediate.nodes.len(),
+            directed_edge_count: intermediate.directed_edges.len(),
+            predicted_speed_profile_count: intermediate.predicted_speed_profile_memory.len()
                 / COEFFICIENT_COUNT,
-            transition_count: self.transitions.len(),
-            turn_lane_count: self.turn_lanes.len(),
-            transfer_count: self.transit_transfers.len(),
-            departure_count: self.transit_departures.len(),
-            stop_count: self.transit_stops.len(),
-            route_count: self.transit_routes.len(),
-            schedule_count: self.transit_schedules.len(),
-            sign_count: self.signs.len(),
-            access_restriction_count: self.access_restrictions.len(),
-            admin_count: self.admins.len(),
-            create_date: self.create_date,
-            bin_offsets: self
+            transition_count: intermediate.transitions.len(),
+            turn_lane_count: intermediate.turn_lanes.len(),
+            transfer_count: intermediate.transit_transfers.len(),
+            departure_count: intermediate.transit_departures.len(),
+            stop_count: intermediate.transit_stops.len(),
+            route_count: intermediate.transit_routes.len(),
+            schedule_count: intermediate.transit_schedules.len(),
+            sign_count: intermediate.signs.len(),
+            access_restriction_count: intermediate.access_restrictions.len(),
+            admin_count: intermediate.admins.len(),
+            create_date: intermediate.create_date,
+            bin_offsets: intermediate
                 .remove_me_header
                 .bin_offsets
                 .map(|offset| offset.into()),
-            complex_forward_restrictions_size: self.complex_forward_restrictions_memory.len(),
-            complex_reverse_restrictions_size: self.complex_reverse_restrictions_memory.len(),
-            edge_info_size: self.edge_info_memory.len(),
-            text_list_size: self.text_memory.len(),
-            lane_connectivity_size: self.lane_connectivity_memory.len(),
+            complex_forward_restrictions_size: intermediate
+                .complex_forward_restrictions_memory
+                .len(),
+            complex_reverse_restrictions_size: intermediate
+                .complex_reverse_restrictions_memory
+                .len(),
+            edge_info_size: intermediate.edge_info_memory.len(),
+            text_list_size: intermediate.text_memory.len(),
+            lane_connectivity_size: intermediate.lane_connectivity_memory.len(),
         };
+
+        let mut result = Vec::with_capacity(HEADER_SIZE + body.len());
         result.extend(header.build()?.as_bytes());
 
         result.extend(body);
@@ -309,7 +486,7 @@ mod tests {
             GraphTileHandle::try_from(in_bytes.clone()).expect("Unable to get tile handle");
 
         let builder = GraphTileBuilder::from(&tile_handle);
-        let out_bytes = builder.to_bytes().expect("Unable to serialize tile");
+        let out_bytes = builder.into_bytes().expect("Unable to serialize tile");
 
         let in_header_slice: [u8; HEADER_SIZE] = in_bytes[0..HEADER_SIZE]
             .try_into()
@@ -386,5 +563,46 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn add_predicted_speeds() {
+        let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("andorra-tiles");
+
+        let in_bytes = std::fs::read(base_dir.join("0").join("003").join("015.gph"))
+            .expect("Unable to read file");
+        let tile_handle =
+            GraphTileHandle::try_from(in_bytes.clone()).expect("Unable to get tile handle");
+
+        // Enrich the tile with the exact same speed information that we did using the Valhalla CSV tools.
+        //
+        // 0/3015/0,50,40,
+        // 0/3015/42,100,42,BcUACQAEACEADP/7/9sAGf/fAAwAGwARAAX/+AAAAB0AFAAS//AAF//+ACwACQAqAAAAKP/6AEMABABsAAsBBAAq/rcAAP+bAAz/zv/s/9MABf/Y//X/8//9/+wACf/P//EADv/8//L//P/y//H////7AAwAFf/5//oADgAZAAQAFf/3/+8AB//yAB8ABv/0AAUAEf/8//QAFAAG//b////j//v//QAT//7/+f/kABMABwABAAv/6//8//cAEwAAABT/8v/6//wAAAAQ//cACwAFAAT/1//sAAEADAABAAYAE//9AAn/7gAH/+AAFQAB//4AC//o/+gAE//+AAAAFf/l//kABP/+//kACAAG//cAHv/qAB0AAv/4/+v/+wALAAMABP/3AAT/8wAIAAr/9wAK//j/+wAEAAD/+P/8//v/8f/2//L//AALAAcABgAG//gAAv/5AAoAHv//AAcAFf/zABD/7AAUAAv/7v/8AAgACAAN//0ADP/iABD/9f/3//7/+P/3AAQADP//AAMABw==
+        // 0/3015/7,12,34,CKD/4f/r/+H/6//g/+v/4P/q/9//6v/f/+r/3v/q/93/6f/b/+n/2v/o/9f/5//V/+b/0f/l/8z/4//G/+D/vf/d/67/1/+V/8z/Xf+u/nz+GwLJAEcAqwAWAFwABwA8AAAAK//8ACD/+AAZ//YAE//0AA//8gAM//AACf/uAAb/7AAE/+kAAv/m////4v/9/93/+f/U//T/xf/q/5//y/6PAQMAngApADkAFwAfABAAEwAMAAwACQAHAAcAAwAGAAAABf/9AAT/+wAD//kAA//2AAL/9AAC//EAAf/tAAH/6AAA/+EAAP/U////tv///x8AFADL//8AQ///ACf//gAa//4AE//+AA7//QAL//0ACP/9AAb//AAE//wAAv/8AAD/+//+//v//P/6//r/+v/2//n/8v/4/+v/9f/b/+//nP+TALoADAAyAAMAHgAAABX//gAQ//0ADf/9AAv//AAJ//sAB//7AAb/+gAF//kABP/4AAP/9wAC//YAAf/1AAD/8//+//D//P/q//f/2w==
+        let out_bytes = GraphTileBuilder::from(&tile_handle)
+            // Typical flow speeds
+            .with_average_speeds(0, 50, 40).unwrap()
+            .with_average_speeds(42, 100, 42).unwrap()
+            // No, this isn't supposed to make sense; it's test data :P
+            .with_average_speeds(7, 12, 34).unwrap()
+            // Granular predicted (historical) speeds
+            .with_predicted_encoded_speeds(7, "CKD/4f/r/+H/6//g/+v/4P/q/9//6v/f/+r/3v/q/93/6f/b/+n/2v/o/9f/5//V/+b/0f/l/8z/4//G/+D/vf/d/67/1/+V/8z/Xf+u/nz+GwLJAEcAqwAWAFwABwA8AAAAK//8ACD/+AAZ//YAE//0AA//8gAM//AACf/uAAb/7AAE/+kAAv/m////4v/9/93/+f/U//T/xf/q/5//y/6PAQMAngApADkAFwAfABAAEwAMAAwACQAHAAcAAwAGAAAABf/9AAT/+wAD//kAA//2AAL/9AAC//EAAf/tAAH/6AAA/+EAAP/U////tv///x8AFADL//8AQ///ACf//gAa//4AE//+AA7//QAL//0ACP/9AAb//AAE//wAAv/8AAD/+//+//v//P/6//r/+v/2//n/8v/4/+v/9f/b/+//nP+TALoADAAyAAMAHgAAABX//gAQ//0ADf/9AAv//AAJ//sAB//7AAb/+gAF//kABP/4AAP/9wAC//YAAf/1AAD/8//+//D//P/q//f/2w==").unwrap()
+            .with_predicted_encoded_speeds(42, "BcUACQAEACEADP/7/9sAGf/fAAwAGwARAAX/+AAAAB0AFAAS//AAF//+ACwACQAqAAAAKP/6AEMABABsAAsBBAAq/rcAAP+bAAz/zv/s/9MABf/Y//X/8//9/+wACf/P//EADv/8//L//P/y//H////7AAwAFf/5//oADgAZAAQAFf/3/+8AB//yAB8ABv/0AAUAEf/8//QAFAAG//b////j//v//QAT//7/+f/kABMABwABAAv/6//8//cAEwAAABT/8v/6//wAAAAQ//cACwAFAAT/1//sAAEADAABAAYAE//9AAn/7gAH/+AAFQAB//4AC//o/+gAE//+AAAAFf/l//kABP/+//kACAAG//cAHv/qAB0AAv/4/+v/+wALAAMABP/3AAT/8wAIAAr/9wAK//j/+wAEAAD/+P/8//v/8f/2//L//AALAAcABgAG//gAAv/5AAoAHv//AAcAFf/zABD/7AAUAAv/7v/8AAgACAAN//0ADP/iABD/9f/3//7/+P/3AAQADP//AAMABw==").unwrap()
+            .into_bytes().unwrap();
+
+        let base_dir_with_traffic = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("andorra-tiles-with-traffic");
+        let expected_out_bytes =
+            std::fs::read(base_dir_with_traffic.join("0").join("003").join("015.gph"))
+                .expect("Unable to read file");
+
+        if out_bytes != expected_out_bytes {
+            std::fs::write("/tmp/failed.gph", &out_bytes).expect("Failed to write failed output");
+        }
+
+        assert_eq!(out_bytes, expected_out_bytes);
     }
 }

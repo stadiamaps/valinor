@@ -3,10 +3,9 @@ use super::{
     TransitRecordBitfield, TransitionCountBitfield, TurnLaneCountBitfield, VALHALLA_EPOCH,
     VERSION_LEN,
 };
-use crate::graph_tile::GraphTileError::CastError;
 use crate::graph_tile::predicted_speeds::COEFFICIENT_COUNT;
 use crate::graph_tile::{
-    AccessRestriction, Admin, DirectedEdge, DirectedEdgeExt, GraphTileError, NodeInfo,
+    AccessRestriction, Admin, DirectedEdge, DirectedEdgeExt, GraphTileBuildError, NodeInfo,
     NodeTransition, Sign, TransitDeparture, TransitRoute, TransitSchedule, TransitStop,
     TransitTransfer, TurnLane,
 };
@@ -71,18 +70,16 @@ pub(crate) struct GraphTileHeaderBuilder {
 }
 
 impl GraphTileHeaderBuilder {
-    pub(crate) fn build(self) -> Result<GraphTileHeader, GraphTileError> {
+    pub(crate) fn build(self) -> Result<GraphTileHeader, GraphTileBuildError> {
         let bit_field_1 = FirstBitfield::default()
             // Guaranteed to be valid
             // (can theoretically be out of the accepted bounds, but this requires unsafe raw init,
             // and it won't corrupt the tile).
             .with_graph_id(self.graph_id.value().into())
             .with_density_checked(self.density.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid density {} must be less than 16",
-                    self.density
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "density".to_string(),
+                value: usize::from(self.density),
             })?
             // NOTE: name_quality, speed_quality, and exit_quality intentionally omitted
             // Guaranteed to be 0 or 1 by the Rust standard
@@ -91,109 +88,83 @@ impl GraphTileHeaderBuilder {
 
         let bit_field_2 = SecondBitfield::default()
             .with_node_count_checked(u32::try_from(self.node_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid node count {} does not fit into 21 bits",
-                    self.node_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "node_count".to_string(),
+                value: usize::from(self.node_count),
             })?
             .with_directed_edge_count_checked(u32::try_from(self.directed_edge_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid directed edge count {} does not fit into 21 bits",
-                    self.directed_edge_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "directed_edge_count".to_string(),
+                value: usize::from(self.directed_edge_count),
             })?
             .with_predicted_speeds_count_checked(
                 u32::try_from(self.predicted_speed_profile_count)?.into(),
             )
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid predicted speeds count {} does not fit into 21 bits",
-                    self.predicted_speed_profile_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "predicted_speed_profile_count".to_string(),
+                value: usize::from(self.predicted_speed_profile_count),
             })?;
 
         let transition_count_bitfield = TransitionCountBitfield::default()
             .with_transition_count_checked(u32::try_from(self.transition_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid transition count {} does not fit into 21 bits",
-                    self.transition_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "transition_count".to_string(),
+                value: usize::from(self.transition_count),
             })?;
 
         let turn_lane_count_bitfield = TurnLaneCountBitfield::default()
             .with_turn_lane_count_checked(u32::try_from(self.turn_lane_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid turn lane count {} does not fit into 21 bits",
-                    self.turn_lane_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "turn_lane_count".to_string(),
+                value: usize::from(self.turn_lane_count),
             })?;
 
         let transit_record_bitfield = TransitRecordBitfield::default()
             .with_transfer_count_checked(u16::try_from(self.transfer_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid transfer count {} does not fit into 16 bits",
-                    self.transfer_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "transfer_count".to_string(),
+                value: usize::from(self.transfer_count),
             })?
             .with_departure_count_checked(u32::try_from(self.departure_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid departure count {} does not fit into 24 bits",
-                    self.departure_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "departure_count".to_string(),
+                value: usize::from(self.departure_count),
             })?
             .with_stop_count_checked(u16::try_from(self.stop_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid stop count {} does not fit into 16 bits",
-                    self.stop_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "stop_count".to_string(),
+                value: usize::from(self.stop_count),
             })?;
 
         let misc_counts_bit_field_one = MiscCountsBitFieldOne::default()
             .with_route_count_checked(u16::try_from(self.route_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid route count {} does not fit into 12 bits",
-                    self.route_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "route_count".to_string(),
+                value: usize::from(self.route_count),
             })?
             .with_schedule_count_checked(u16::try_from(self.schedule_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid schedule count {} does not fit into 12 bits",
-                    self.schedule_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "schedule_count".to_string(),
+                value: usize::from(self.schedule_count),
             })?
             .with_sign_count_checked(u32::try_from(self.sign_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid sign count {} does not fit into 24 bits",
-                    self.sign_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "sign_count".to_string(),
+                value: usize::from(self.sign_count),
             })?;
 
         let misc_counts_bit_field_two = MiscCountsBitFieldTwo::default()
             .with_access_restriction_count_checked(
                 u32::try_from(self.access_restriction_count)?.into(),
             )
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid access restriction count {} does not fit into 24 bits",
-                    self.access_restriction_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "access_restriction_count".to_string(),
+                value: usize::from(self.access_restriction_count),
             })?
             .with_admin_count_checked(u16::try_from(self.admin_count)?.into())
-            .map_err(|_| {
-                CastError(format!(
-                    "Invalid admin count {} does not fit into 16 bits",
-                    self.admin_count
-                ))
+            .map_err(|_| GraphTileBuildError::BitfieldOverflow {
+                field: "admin_count".to_string(),
+                value: usize::from(self.admin_count),
             })?;
 
         // Calculate the starting offset of the variable sized data areas
@@ -224,20 +195,16 @@ impl GraphTileHeaderBuilder {
             complex_reverse_restrictions_offset + self.complex_reverse_restrictions_size;
         let text_list_offset = edge_info_offset + self.edge_info_size;
         let lane_connectivity_offset = text_list_offset + self.text_list_size;
-        let predicted_speed_offset = if self.predicted_speed_profile_count > 0 {
-            lane_connectivity_offset + self.lane_connectivity_size
-        } else {
-            0
-        };
-
-        let tile_size = if self.predicted_speed_profile_count > 0 {
-            predicted_speed_offset +
-            // Offsets
-            (self.directed_edge_count * size_of::<u32>())
+        let (predicted_speed_offset, tile_size) = if self.predicted_speed_profile_count > 0 {
+            let pso = lane_connectivity_offset + self.lane_connectivity_size;
+            let size = pso +
+                // Offsets
+                (self.directed_edge_count * size_of::<u32>())
                 // Profile data
-                + (self.predicted_speed_profile_count * size_of::<i16>() * COEFFICIENT_COUNT)
+                + (self.predicted_speed_profile_count * size_of::<i16>() * COEFFICIENT_COUNT);
+            (pso, size)
         } else {
-            lane_connectivity_offset + self.lane_connectivity_size
+            (0, lane_connectivity_offset + self.lane_connectivity_size)
         };
 
         Ok(GraphTileHeader {

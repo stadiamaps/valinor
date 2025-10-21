@@ -1,4 +1,6 @@
-use crate::{AsCowStr, BicycleNetwork, graph_tile::GraphTileError, shape_codec::decode_shape};
+use crate::{
+    AsCowStr, BicycleNetwork, graph_tile::GraphTileDecodingError, shape_codec::decode_shape,
+};
 use bitfield_struct::bitfield;
 use enumset::EnumSet;
 use geo::LineString;
@@ -171,7 +173,7 @@ impl EdgeInfo<'_> {
 
 // TODO: Feels like this could be a macro
 impl<'a> TryFrom<(&'a [u8], &'a [u8])> for EdgeInfo<'a> {
-    type Error = GraphTileError;
+    type Error = GraphTileDecodingError;
 
     fn try_from((bytes, text_list_memory): (&'a [u8], &'a [u8])) -> Result<Self, Self::Error> {
         const INNER_SIZE: usize = size_of::<EdgeInfoInner>();
@@ -182,7 +184,7 @@ impl<'a> TryFrom<(&'a [u8], &'a [u8])> for EdgeInfo<'a> {
             &bytes[INNER_SIZE..],
             inner.second_inner_bitfield.name_count() as usize,
         )
-        .map_err(|e| GraphTileError::CastError(e.to_string()))?;
+        .map_err(|e| GraphTileDecodingError::CastError(e.to_string()))?;
 
         let offset = 0;
         let (encoded_shape, offset) = {

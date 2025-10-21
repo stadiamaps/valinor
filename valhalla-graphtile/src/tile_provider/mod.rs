@@ -6,7 +6,9 @@ use thiserror::Error;
 mod directory_tile_provider;
 
 use crate::graph_id::InvalidGraphIdError;
-use crate::graph_tile::{GraphTile, GraphTileError, GraphTileHandle, LookupError, NodeInfo};
+use crate::graph_tile::{
+    GraphTile, GraphTileDecodingError, GraphTileHandle, LookupError, NodeInfo,
+};
 pub use directory_tile_provider::DirectoryTileProvider;
 
 #[derive(Debug, Error)]
@@ -20,7 +22,7 @@ pub enum GraphTileProviderError {
     #[error("IO Error: {0}")]
     IoError(#[from] std::io::Error),
     #[error("Graph tile error: {0}")]
-    GraphTileError(#[from] GraphTileError),
+    GraphTileError(#[from] GraphTileDecodingError),
     #[error("Graph tile lookup error: {0}")]
     GraphTileLookupError(#[from] LookupError),
 }

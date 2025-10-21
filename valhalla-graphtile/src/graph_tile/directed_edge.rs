@@ -317,10 +317,8 @@ impl DirectedEdge {
 
     /// The estimated edge speed, in kph.
     ///
-    /// This is assigned from a variety of factors.
-    /// See <https://valhalla.github.io/valhalla/speeds/>.
-    ///
-    /// TODO: Values above 250 are special. Reflect this in types?
+    /// NOTE: Values above 250 are special, and zero means no data.
+    /// TODO: Reflect this in types?
     #[inline]
     pub const fn speed(&self) -> u8 {
         self.third_bitfield.speed()
@@ -328,35 +326,56 @@ impl DirectedEdge {
 
     /// The estimated speed of the edge when there is no traffic, in kph.
     ///
-    /// This is assigned from a variety of factors.
-    /// See <https://valhalla.github.io/valhalla/speeds/>.
-    ///
-    /// TODO: Values above 250 are special. Reflect this in types?
+    /// NOTE: Values above 250 are special, and zero means no data.
+    /// TODO: Reflect this in types?
     #[inline]
     pub const fn free_flow_speed(&self) -> u8 {
         self.third_bitfield.free_flow_speed()
     }
 
+    /// Set the estimated speed of the edge when there is no traffic, in kph.
+    ///
+    /// NOTE: Values above 250 are special, and zero means no data.
+    /// TODO: Reflect this in types?
+    #[inline]
+    pub const fn set_free_flow_speed(&mut self, speed: u8) {
+        self.third_bitfield.set_free_flow_speed(speed)
+    }
+
     /// The estimated speed of the edge when there is traffic, in kph.
     ///
-    /// This is assigned from a variety of factors.
-    /// See <https://valhalla.github.io/valhalla/speeds/>.
-    ///
-    /// TODO: Values above 250 are special. Reflect this in types?
+    /// NOTE: Values above 250 are special, and zero means no data.
+    /// TODO: Reflect this in types?
     #[inline]
     pub const fn constrained_flow_speed(&self) -> u8 {
         self.third_bitfield.constrained_flow_speed()
     }
 
+    /// Set the estimated speed of the edge when there is traffic, in kph.
+    ///
+    /// NOTE: Values above 250 are special, and zero means no data.
+    /// TODO: Reflect this in types?
+    #[inline]
+    pub const fn set_constrained_speed(&mut self, speed: u8) {
+        self.third_bitfield.set_constrained_flow_speed(speed)
+    }
+
     /// The estimated speed of the edge for trucks, in kph.
     ///
-    /// This is assigned from a variety of factors.
-    /// See <https://valhalla.github.io/valhalla/speeds/>.
-    ///
-    /// TODO: Values above 250 are special. Reflect this in types?
+    /// NOTE: Values above 250 are special, and zero means no data.
+    /// TODO: Reflect this in types?
     #[inline]
     pub const fn truck_speed(&self) -> u8 {
         self.third_bitfield.truck_speed()
+    }
+
+    /// Set the estimated speed of the edge for trucks, in kph.
+    ///
+    /// NOTE: Values above 250 are special, and zero means no data.
+    /// TODO: Reflect this in types?
+    #[inline]
+    pub const fn set_truck_speed(mut self, speed: u8) {
+        self.third_bitfield.set_truck_speed(speed)
     }
 
     /// The way the edge is used.
@@ -422,6 +441,15 @@ impl DirectedEdge {
     #[inline]
     pub const fn has_predicted_speed(&self) -> bool {
         self.third_bitfield.has_predicted_speed() != 0
+    }
+
+    /// Sets whether the edge has predicted speed information.
+    ///
+    /// This should ALWAYS be called in tandem with [`crate::graph_tile::GraphTileBuilder::with_predicted_speeds`]
+    /// or [`crate::graph_tile::GraphTileBuilder::with_predicted_encoded_speeds`],
+    #[inline]
+    pub(crate) fn set_has_predicted_speed(&mut self, value: bool) {
+        self.third_bitfield.set_has_predicted_speed(value.into());
     }
 
     /// Gets the forward access modes.
