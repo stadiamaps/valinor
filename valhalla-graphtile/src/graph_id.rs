@@ -1,7 +1,6 @@
 use crate::tile_hierarchy::{STANDARD_LEVELS, TRANSIT_LEVEL};
 #[cfg(feature = "serde")]
-use serde::Serialize;
-use serde::Serializer;
+use serde::{Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use thiserror::Error;
