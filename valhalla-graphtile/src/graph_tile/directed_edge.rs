@@ -199,6 +199,7 @@ struct StopImpact {
 /// Since transit lines are schedule-based, they have no need for edge transition logic,
 /// so we can freely share this field.
 #[repr(C)]
+// TODO: Figure out how to warn against ever using copy by accident...
 #[derive(FromBytes, IntoBytes, Immutable, Unaligned, Copy, Clone)]
 union StopOrLine {
     stop_impact: StopImpact,
@@ -315,64 +316,45 @@ impl DirectedEdge {
         self.second_bitfield.no_thru() != 0
     }
 
+    // TODO: Figure out how to represent magic speed values: https://github.com/stadiamaps/valinor/issues/5
+
     /// The estimated edge speed, in kph.
-    ///
-    /// NOTE: Values above 250 are special, and zero means no data.
-    /// TODO: Reflect this in types?
     #[inline]
     pub const fn speed(&self) -> u8 {
         self.third_bitfield.speed()
     }
 
     /// The estimated speed of the edge when there is no traffic, in kph.
-    ///
-    /// NOTE: Values above 250 are special, and zero means no data.
-    /// TODO: Reflect this in types?
     #[inline]
     pub const fn free_flow_speed(&self) -> u8 {
         self.third_bitfield.free_flow_speed()
     }
 
     /// Set the estimated speed of the edge when there is no traffic, in kph.
-    ///
-    /// NOTE: Values above 250 are special, and zero means no data.
-    /// TODO: Reflect this in types?
     #[inline]
     pub const fn set_free_flow_speed(&mut self, speed: u8) {
         self.third_bitfield.set_free_flow_speed(speed)
     }
 
     /// The estimated speed of the edge when there is traffic, in kph.
-    ///
-    /// NOTE: Values above 250 are special, and zero means no data.
-    /// TODO: Reflect this in types?
     #[inline]
     pub const fn constrained_flow_speed(&self) -> u8 {
         self.third_bitfield.constrained_flow_speed()
     }
 
     /// Set the estimated speed of the edge when there is traffic, in kph.
-    ///
-    /// NOTE: Values above 250 are special, and zero means no data.
-    /// TODO: Reflect this in types?
     #[inline]
     pub const fn set_constrained_speed(&mut self, speed: u8) {
         self.third_bitfield.set_constrained_flow_speed(speed)
     }
 
     /// The estimated speed of the edge for trucks, in kph.
-    ///
-    /// NOTE: Values above 250 are special, and zero means no data.
-    /// TODO: Reflect this in types?
     #[inline]
     pub const fn truck_speed(&self) -> u8 {
         self.third_bitfield.truck_speed()
     }
 
     /// Set the estimated speed of the edge for trucks, in kph.
-    ///
-    /// NOTE: Values above 250 are special, and zero means no data.
-    /// TODO: Reflect this in types?
     #[inline]
     pub const fn set_truck_speed(mut self, speed: u8) {
         self.third_bitfield.set_truck_speed(speed)
