@@ -41,9 +41,11 @@ jobs:
       run: cargo nextest run --no-fail-fast --target s390x-unknown-linux-gnu
 
     - name: Install Miri
+      if: matrix.os == 'ubuntu-latest'
       run: rustup +nightly component add miri
 
     - name: Run tests in Miri
+      if: matrix.os == 'ubuntu-latest'
       run: cargo +nightly miri nextest run --no-fail-fast
       env:
         RUST_BACKTRACE: 1
