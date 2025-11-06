@@ -5,14 +5,15 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-// TODO: mmapped tarball version
-mod directory_tile_provider;
+mod directory;
+mod tarball;
 
 use crate::graph_id::InvalidGraphIdError;
 use crate::graph_tile::{
-    GraphTile, GraphTileDecodingError, GraphTileHandle, LookupError, NodeInfo,
+    GraphTile, GraphTileDecodingError, LookupError, NodeInfo, OwnedGraphTileHandle,
 };
-pub use directory_tile_provider::DirectoryTileProvider;
+pub use directory::DirectoryGraphTileProvider;
+pub use tarball::TarballTileProvider;
 
 #[derive(Debug, Error)]
 pub enum GraphTileProviderError {
@@ -24,17 +25,18 @@ pub enum GraphTileProviderError {
     InvalidGraphId(#[from] InvalidGraphIdError),
     #[error("IO Error: {0}")]
     IoError(#[from] std::io::Error),
-    #[error("Graph tile error: {0}")]
-    GraphTileError(#[from] GraphTileDecodingError),
+    #[error("Decoding error: {0}")]
+    DecodingError(#[from] GraphTileDecodingError),
     #[error("Graph tile lookup error: {0}")]
     GraphTileLookupError(#[from] LookupError),
     #[error("Cache lock is poisoned: {0}")]
     PoisonedCacheLock(String),
+    #[error("Invalid tarball: {0}")]
+    InvalidTarball(String),
 }
 
 #[async_trait]
 pub trait GraphTileProvider {
-    // TODO: Should this be async? Seems like it to allow network retrieval.
     /// Gets a tile with the given graph ID.
     ///
     /// # Errors
@@ -50,7 +52,7 @@ pub trait GraphTileProvider {
     async fn get_tile_containing(
         &self,
         graph_id: GraphId,
-    ) -> Result<Arc<GraphTileHandle>, GraphTileProviderError>;
+    ) -> Result<Arc<OwnedGraphTileHandle>, GraphTileProviderError>;
 
     /// Gets the opposing edge and the tile containing it.
     ///
@@ -71,7 +73,7 @@ pub trait GraphTileProvider {
     async fn get_opposing_edge(
         &self,
         graph_id: GraphId,
-    ) -> Result<(GraphId, Arc<GraphTileHandle>), GraphTileProviderError> {
+    ) -> Result<(GraphId, Arc<OwnedGraphTileHandle>), GraphTileProviderError> {
         let tile = self.get_tile_containing(graph_id).await?;
         let edge = tile.get_directed_edge(graph_id)?;
 

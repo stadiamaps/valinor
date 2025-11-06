@@ -140,7 +140,8 @@ impl NodeTransition {
     /// The ID of the corresponding end node on another hierarchy level.
     #[inline]
     pub const fn corresponding_end_node_id(&self) -> GraphId {
-        // Safety: We know that this value cannot be larger than 46 bits.
+        // Safety: We know that the bit field cannot contain a value
+        // larger than the max allowed value (it's limited to 46 bits).
         unsafe { GraphId::from_id_unchecked(self.end_node_id()) }
     }
 

@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use thiserror::Error;
 use zerocopy::{FromBytes, I16, LE, U32, U64, transmute};
 
 use enumset::EnumSet;
+use memmap2::MmapRaw;
 use self_cell::self_cell;
 #[cfg(test)]
 use std::sync::LazyLock;
@@ -190,17 +192,57 @@ pub trait GraphTile {
 }
 
 self_cell! {
-    /// A read-only owned view of a graph tile.
-    ///
-    /// This can be constructed from an owned byte array, `Vec<u8>`.
-    pub struct GraphTileHandle {
+    /// A read-only view of a graph tile.
+    pub struct OwnedGraphTileHandle {
         owner: Vec<u8>,
         #[covariant]
         dependent: GraphTileView,
     }
 }
 
-impl GraphTile for GraphTileHandle {
+/// An encapsulating type that can be used to get the actual bytes for a tile.
+///
+/// This provides a single type that can "own" the backing bytes for tile memory,
+/// which we leverage in the `self_cell` to create a zero-copy view.
+///
+/// # Safety
+///
+/// This doesn't make any strong synchronization guarantees.
+/// In fact, it's probably wildly unsafe if you have a map.
+pub struct MmapTilePointer {
+    /// A handle to the memory map that can be shared across threads.
+    pub(crate) mmap: Arc<MmapRaw>,
+    /// The offsets of the represented data within the memory map.
+    pub(crate) offsets: TileOffset,
+}
+
+impl MmapTilePointer {
+    /// Returns a slice view over the data mapped in memory.
+    ///
+    /// # Safety
+    ///
+    /// The backing memory map must never be mutated during the lifetime of this type.
+    /// Additionally, we explicitly assume that the index and offsets describe a valid tile.
+    pub unsafe fn as_tile_bytes(&self) -> &[u8] {
+        unsafe {
+            // `as_ptr` assumes that the file has not been truncated, or else raises a SIGBUS.
+            let start_ptr = self.mmap.as_ptr().offset(self.offsets.offset as isize);
+            // Assumes the offset and size are valid.
+            core::slice::from_raw_parts(start_ptr, self.offsets.size as usize)
+        }
+    }
+}
+
+/// A tile offset, used for internal storage out of the parsed index.
+#[derive(Copy, Clone)]
+pub(crate) struct TileOffset {
+    /// Byte offset from the beginning of the tar
+    pub(crate) offset: u64,
+    /// The size of the tile in bytes.
+    pub(crate) size: u32,
+}
+
+impl GraphTile for OwnedGraphTileHandle {
     #[inline]
     fn graph_id(&self) -> GraphId {
         self.borrow_dependent().graph_id()
@@ -275,18 +317,18 @@ impl GraphTile for GraphTileHandle {
     }
 }
 
-impl TryFrom<Vec<u8>> for GraphTileHandle {
+impl TryFrom<Vec<u8>> for OwnedGraphTileHandle {
     type Error = GraphTileDecodingError;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        GraphTileHandle::try_new(value, |data| GraphTileView::try_from(data.as_ref()))
+        OwnedGraphTileHandle::try_new(value, |data| GraphTileView::try_from(data.as_slice()))
     }
 }
 
 /// An internal view over a single tile in the Valhalla hierarchical tile graph.
 ///
 /// Access should normally go through the [``GraphTile``](GraphTile) trait.
-struct GraphTileView<'a> {
+pub struct GraphTileView<'a> {
     /// Header with various metadata about the tile and internal sizes.
     header: GraphTileHeader,
     /// The list of nodes in the graph tile.
@@ -712,7 +754,7 @@ const TEST_GRAPH_TILE_ID_L0: GraphId = unsafe { GraphId::from_components_uncheck
 const TEST_GRAPH_TILE_ID_L2: GraphId = unsafe { GraphId::from_components_unchecked(2, 762485, 0) };
 
 #[cfg(test)]
-static TEST_GRAPH_TILE_L0: LazyLock<GraphTileHandle> = LazyLock::new(|| {
+static TEST_GRAPH_TILE_L0: LazyLock<OwnedGraphTileHandle> = LazyLock::new(|| {
     let relative_path = TEST_GRAPH_TILE_ID_L0
         .file_path("gph")
         .expect("Unable to get relative path");
@@ -722,11 +764,11 @@ static TEST_GRAPH_TILE_L0: LazyLock<GraphTileHandle> = LazyLock::new(|| {
         .join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
-    GraphTileHandle::try_from(bytes).expect("Unable to get tile")
+    OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
 });
 
 #[cfg(test)]
-static TEST_GRAPH_TILE_L2: LazyLock<GraphTileHandle> = LazyLock::new(|| {
+static TEST_GRAPH_TILE_L2: LazyLock<OwnedGraphTileHandle> = LazyLock::new(|| {
     let relative_path = TEST_GRAPH_TILE_ID_L2
         .file_path("gph")
         .expect("Unable to get relative path");
@@ -736,7 +778,7 @@ static TEST_GRAPH_TILE_L2: LazyLock<GraphTileHandle> = LazyLock::new(|| {
         .join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
-    GraphTileHandle::try_from(bytes).expect("Unable to get tile")
+    OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
 });
 
 /// Test data note: this relies on a binary fixture
@@ -751,7 +793,7 @@ static TEST_GRAPH_TILE_L2: LazyLock<GraphTileHandle> = LazyLock::new(|| {
 /// 0/3015/7,12,34,CKD/4f/r/+H/6//g/+v/4P/q/9//6v/f/+r/3v/q/93/6f/b/+n/2v/o/9f/5//V/+b/0f/l/8z/4//G/+D/vf/d/67/1/+V/8z/Xf+u/nz+GwLJAEcAqwAWAFwABwA8AAAAK//8ACD/+AAZ//YAE//0AA//8gAM//AACf/uAAb/7AAE/+kAAv/m////4v/9/93/+f/U//T/xf/q/5//y/6PAQMAngApADkAFwAfABAAEwAMAAwACQAHAAcAAwAGAAAABf/9AAT/+wAD//kAA//2AAL/9AAC//EAAf/tAAH/6AAA/+EAAP/U////tv///x8AFADL//8AQ///ACf//gAa//4AE//+AA7//QAL//0ACP/9AAb//AAE//wAAv/8AAD/+//+//v//P/6//r/+v/2//n/8v/4/+v/9f/b/+//nP+TALoADAAyAAMAHgAAABX//gAQ//0ADf/9AAv//AAJ//sAB//7AAb/+gAF//kABP/4AAP/9wAC//YAAf/1AAD/8//+//D//P/q//f/2w==
 /// ```
 #[cfg(test)]
-static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<GraphTileHandle> = LazyLock::new(|| {
+static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<OwnedGraphTileHandle> = LazyLock::new(|| {
     let relative_path = TEST_GRAPH_TILE_ID_L0
         .file_path("gph")
         .expect("Unable to get relative path");
@@ -761,7 +803,7 @@ static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<GraphTileHandle> = LazyLock::new(|| {
         .join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
-    GraphTileHandle::try_from(bytes).expect("Unable to get tile")
+    OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
 });
 
 #[cfg(test)]

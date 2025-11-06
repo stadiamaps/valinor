@@ -10,10 +10,12 @@ serde = ["dep:serde"]
 serialize_predicted_speed = ["serde"]
 
 [dependencies]
+tar = "0.4.44"
 async-trait = "0.1.89"
 base64 = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
+futures = { workspace = true }
 self_cell = "1.2.0"
 thiserror = { workspace = true }
 geo = { workspace = true }
@@ -22,7 +24,7 @@ bit-twiddling-helpers = { workspace = true }
 enumset = "1.1.7"
 integer-encoding = "4.0.2"
 lru = { workspace = true }
-#memmap2 = { workspace = true }
+memmap2 = { workspace = true }
 num_enum = { workspace = true }
 trig-const = "0.3.0"
 serde = { workspace = true, optional = true }

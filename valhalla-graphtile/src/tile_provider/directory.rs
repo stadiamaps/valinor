@@ -1,6 +1,6 @@
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
-use crate::graph_tile::GraphTileHandle;
+use crate::graph_tile::OwnedGraphTileHandle;
 use crate::graph_tile::{GraphTileBuildError, GraphTileBuilder};
 use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, LockTable};
 use async_trait::async_trait;
@@ -14,16 +14,24 @@ use tokio::{
     io::{AsyncWriteExt, BufWriter},
 };
 
-pub struct DirectoryTileProvider {
+/// A graph tile provider that backed by a directory of tiles.
+///
+/// # Resource consumption
+///
+/// To minimize file handle churn and re-validation of the mapped tile memory,
+/// this includes an internal LRU cache.
+/// This is configurable with a max number of cached tiles.
+/// Any cached tiles will remain in memory.
+pub struct DirectoryGraphTileProvider {
     base_directory: PathBuf,
     lock_table: LockTable<GraphId>,
     // TODO: This is a bit hackish for now, but even so it speeds things up MASSIVELY for many workloads!
-    lru_cache: Mutex<LruCache<GraphId, Arc<GraphTileHandle>>>,
+    lru_cache: Mutex<LruCache<GraphId, Arc<OwnedGraphTileHandle>>>,
 }
 
-impl DirectoryTileProvider {
+impl DirectoryGraphTileProvider {
     pub fn new(base_directory: PathBuf, num_cached_tiles: NonZeroUsize) -> Self {
-        DirectoryTileProvider {
+        DirectoryGraphTileProvider {
             base_directory,
             lock_table: LockTable::new(),
             lru_cache: Mutex::new(LruCache::new(num_cached_tiles)),
@@ -37,16 +45,16 @@ impl DirectoryTileProvider {
     ///
     /// The implementation takes the following steps to ensure data race safety:
     ///
-    /// - Acquires a lock at the start of the call, ensuring that calls to [`DirectoryTileProvider::get_tile_containing`]
+    /// - Acquires a lock at the start of the call, ensuring that calls to [`DirectoryGraphTileProvider::get_tile_containing`]
     ///   block until this method exits.
     /// - Writes to a temporary file initially, so if anything goes wrong, the original file is not affected.
     ///   After successfully writing the temp file, it is atomically renamed on top of the original.
-    /// - Clears the internal tile cache (local to _this_ [`DirectoryTileProvider`] instance!)
+    /// - Clears the internal tile cache (local to _this_ [`DirectoryGraphTileProvider`] instance!)
     ///   once the rename succeeds.
     /// - Releases the lock, unblocking access to this tile, only after everything succeeds,
     ///   or fails mid-write (in which case, only the temporary file is affected).
     ///
-    /// In this way, a (single!) [`DirectoryTileProvider`] should be safe to use in async contexts,
+    /// In this way, a (single!) [`DirectoryGraphTileProvider`] should be safe to use in async contexts,
     /// without fear of races from writers.
     /// Additionally, since readers always have to wait for a writer to finish,
     /// readers will never get a partially written tile, nor will they get a stale tile
@@ -54,7 +62,7 @@ impl DirectoryTileProvider {
     ///
     /// ## Edge cases
     ///
-    /// Once you have a handle to a graph tile from [`DirectoryTileProvider::get_tile_containing`],
+    /// Once you have a handle to a graph tile from [`DirectoryGraphTileProvider::get_tile_containing`],
     /// the lock is freed and a writer may then proceed.
     /// Your handle will _not_ change or block writers,
     /// creating an opportunity for edge cases (especially if you plan to create a builder from this tile
@@ -121,11 +129,11 @@ impl DirectoryTileProvider {
 }
 
 #[async_trait]
-impl GraphTileProvider for DirectoryTileProvider {
+impl GraphTileProvider for DirectoryGraphTileProvider {
     async fn get_tile_containing(
         &self,
         graph_id: GraphId,
-    ) -> Result<Arc<GraphTileHandle>, GraphTileProviderError> {
+    ) -> Result<Arc<OwnedGraphTileHandle>, GraphTileProviderError> {
         let lock = self.lock_table.lock_for(graph_id);
         let _guard = lock.lock().await;
 
@@ -141,11 +149,13 @@ impl GraphTileProvider for DirectoryTileProvider {
                 let path = self.path_for_graph_id(base_graph_id)?;
                 // Open the file and read all bytes into a buffer
                 // NOTE: Does not handle compressed tiles
+                // FIXME: We should probably use tokio::fs::read here, but this closure is not async.
+                // I'm also not sure how deep we want the tokio dependencies to go... it's complicated.
                 let data = std::fs::read(path).map_err(|e| match e.kind() {
                     ErrorKind::NotFound => GraphTileProviderError::TileDoesNotExist,
                     _ => GraphTileProviderError::IoError(e),
                 })?;
-                let tile = GraphTileHandle::try_from(data)?;
+                let tile = OwnedGraphTileHandle::try_from(data)?;
                 Ok::<_, GraphTileProviderError>(Arc::new(tile))
             })
             .cloned()?;
@@ -157,27 +167,32 @@ impl GraphTileProvider for DirectoryTileProvider {
 
 #[cfg(test)]
 mod test {
-    use super::DirectoryTileProvider;
+    use super::DirectoryGraphTileProvider;
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
     use crate::tile_provider::GraphTileProvider;
+    use core::num::NonZeroUsize;
     use rand::{
         distr::{Distribution, Uniform},
         rng,
     };
-    use std::num::NonZeroUsize;
     use std::path::PathBuf;
 
-    #[tokio::test]
-    async fn test_get_tile() {
+    // NOTE: In most projects, these tests would be written with #[tokio::test] for simplicity.
+    // We avoid that in our tests to enable greater compatibility under Miri.
+    // Miri support for syscalls on non-Linux platforms, even Tier 1 ones,
+    // is limited, and Tokio uses kqueue on macOS (and presumably FreeBSD).
+    // Our use case does not require any sort of work stealing or complex dependencies,
+    // so we use the blocking executor directly to drive futures completion.
+
+    #[test]
+    fn test_get_tile() {
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles");
-        let provider = DirectoryTileProvider::new(base, NonZeroUsize::new(1).unwrap());
+        let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-        let tile = provider
-            .get_tile_containing(graph_id)
-            .await
+        let tile = futures::executor::block_on(provider.get_tile_containing(graph_id))
             .expect("Unable to get tile");
 
         // Minimally test that we got the correct tile
@@ -185,18 +200,16 @@ mod test {
         assert_eq!(tile.header().graph_id().value(), graph_id.value());
     }
 
-    #[tokio::test]
-    async fn test_get_opp_edge() {
+    #[test]
+    fn test_get_opp_edge() {
         let mut rng = rng();
 
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles");
-        let provider = DirectoryTileProvider::new(base, NonZeroUsize::new(1).unwrap());
+        let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-        let tile = provider
-            .get_tile_containing(graph_id)
-            .await
+        let tile = futures::executor::block_on(provider.get_tile_containing(graph_id))
             .expect("Unable to get tile");
 
         // Cross-check the default implementation of the opposing edge ID function.
@@ -208,9 +221,7 @@ mod test {
             let opp_edge_index = tile
                 .get_opp_edge_index(edge_id)
                 .expect("Unable to get opp edge index.");
-            let (opp_edge_id, _) = provider
-                .get_opposing_edge(edge_id)
-                .await
+            let (opp_edge_id, _) = futures::executor::block_on(provider.get_opposing_edge(edge_id))
                 .expect("Unable to get opposing edge.");
             assert_eq!(u64::from(opp_edge_index), opp_edge_id.index());
         }

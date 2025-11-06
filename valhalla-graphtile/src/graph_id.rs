@@ -107,6 +107,9 @@ impl GraphId {
     ///
     /// Invalid values risk things like out-of-bounds level indexes,
     /// which could cause crashes or other unexpected behavior.
+    /// This is in some ways more unsafe than [`GraphId::from_id_unchecked`],
+    /// since it is possible to specify an illegal field value (e.g. `level`),
+    /// which will result in a completely bogus ID.
     pub const unsafe fn from_components_unchecked(level: u8, tile_id: u64, index: u64) -> Self {
         Self(U64::<LE>::new(level as u64 | (tile_id << 3) | index << 25))
     }

@@ -266,7 +266,8 @@ impl DirectedEdge {
     /// Is this a transit line (buss or rail)?
     #[inline]
     pub const fn end_node_id(&self) -> GraphId {
-        // Safety: We know the number of bits is limited
+        // Safety: We know that the bit field cannot contain a value
+        // larger than the max allowed value (it's limited to 46 bits).
         unsafe { GraphId::from_id_unchecked(self.first_bitfield.end_node()) }
     }
 

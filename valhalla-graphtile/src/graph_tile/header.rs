@@ -213,7 +213,7 @@ impl GraphTileHeader {
     #[inline]
     pub const fn graph_id(&self) -> GraphId {
         // Safety: We know that the bit field cannot contain a value
-        // larger than the max allowed value.
+        // larger than the max allowed value (it's limited to 46 bits).
         unsafe { GraphId::from_id_unchecked(self.bit_field_1.graph_id()) }
     }
 

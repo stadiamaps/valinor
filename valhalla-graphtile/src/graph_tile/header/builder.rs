@@ -70,6 +70,7 @@ pub(crate) struct GraphTileHeaderBuilder {
 }
 
 impl GraphTileHeaderBuilder {
+    #[expect(clippy::too_many_lines)]
     pub(crate) fn build(self) -> Result<GraphTileHeader, GraphTileBuildError> {
         let bit_field_1 = FirstBitfield::default()
             // Guaranteed to be valid

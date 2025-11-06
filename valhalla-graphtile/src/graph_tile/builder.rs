@@ -1,7 +1,7 @@
 use super::{
-    AccessRestriction, Admin, DirectedEdge, DirectedEdgeExt, GraphTileBuildError, GraphTileHandle,
-    GraphTileHeader, GraphTileView, NodeInfo, NodeTransition, Sign, TransitDeparture, TransitRoute,
-    TransitSchedule, TransitStop, TransitTransfer, TurnLane,
+    AccessRestriction, Admin, DirectedEdge, DirectedEdgeExt, GraphTileBuildError, GraphTileHeader,
+    GraphTileView, NodeInfo, NodeTransition, OwnedGraphTileHandle, Sign, TransitDeparture,
+    TransitRoute, TransitSchedule, TransitStop, TransitTransfer, TurnLane,
 };
 use crate::GraphId;
 use crate::graph_tile::header::{GraphTileHeaderBuilder, VERSION_LEN};
@@ -98,8 +98,8 @@ pub struct GraphTileBuilder<'a> {
     predicted_speed_profile_memory: Cow<'a, [I16<LE>]>,
 }
 
-impl<'a> From<&'a GraphTileHandle> for GraphTileBuilder<'a> {
-    fn from(value: &'a GraphTileHandle) -> Self {
+impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
+    fn from(value: &'a OwnedGraphTileHandle) -> Self {
         let GraphTileView {
             header,
             nodes,
@@ -604,7 +604,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::graph_tile::{GraphTileBuilder, GraphTileHandle, GraphTileHeader};
+    use crate::graph_tile::{GraphTileBuilder, GraphTileHeader, OwnedGraphTileHandle};
     use std::path::Path;
     use walkdir::WalkDir;
 
@@ -613,7 +613,7 @@ mod tests {
 
         let in_bytes = std::fs::read(path).expect("Unable to read file");
         let tile_handle =
-            GraphTileHandle::try_from(in_bytes.clone()).expect("Unable to get tile handle");
+            OwnedGraphTileHandle::try_from(in_bytes.clone()).expect("Unable to get tile handle");
 
         let builder = GraphTileBuilder::from(&tile_handle);
         let out_bytes = builder.into_bytes().expect("Unable to serialize tile");
@@ -704,7 +704,7 @@ mod tests {
         let in_bytes = std::fs::read(base_dir.join("0").join("003").join("015.gph"))
             .expect("Unable to read file");
         let tile_handle =
-            GraphTileHandle::try_from(in_bytes.clone()).expect("Unable to get tile handle");
+            OwnedGraphTileHandle::try_from(in_bytes.clone()).expect("Unable to get tile handle");
 
         // Enrich the tile with the exact same speed information that we did using the Valhalla CSV tools.
         //

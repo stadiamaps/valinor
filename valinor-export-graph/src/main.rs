@@ -15,10 +15,10 @@ use tracing::warn;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
-use valhalla_graphtile::graph_tile::{DirectedEdge, GraphTile, GraphTileHandle, LookupError};
+use valhalla_graphtile::graph_tile::{DirectedEdge, GraphTile, LookupError, OwnedGraphTileHandle};
 use valhalla_graphtile::tile_hierarchy::STANDARD_LEVELS;
 use valhalla_graphtile::tile_provider::{
-    DirectoryTileProvider, GraphTileProvider, GraphTileProviderError,
+    DirectoryGraphTileProvider, GraphTileProvider, GraphTileProviderError,
 };
 use valhalla_graphtile::{GraphId, RoadUse};
 use zstd::Encoder;
@@ -80,7 +80,7 @@ impl Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let tile_path = cli.tile_path.clone();
-    let reader = DirectoryTileProvider::new(tile_path.clone(), NonZeroUsize::new(25).unwrap());
+    let reader = DirectoryGraphTileProvider::new(tile_path.clone(), NonZeroUsize::new(25).unwrap());
 
     let write_to_stdout = cli.write_to_stdout();
 
@@ -183,7 +183,7 @@ fn main() -> anyhow::Result<()> {
         .try_for_each(|(tile_id, edge_index_offset)| {
             // NOTE: We can't share readers across threads (at least for now)
             let reader =
-                DirectoryTileProvider::new(tile_path.clone(), NonZeroUsize::new(25).unwrap());
+                DirectoryGraphTileProvider::new(tile_path.clone(), NonZeroUsize::new(25).unwrap());
 
             let tile = futures::executor::block_on(reader.get_tile_containing(*tile_id))?;
 
@@ -245,10 +245,10 @@ fn main() -> anyhow::Result<()> {
 
 fn export_edges_for_tile<W: Write>(
     mut writer: W,
-    tile: Arc<GraphTileHandle>,
+    tile: Arc<OwnedGraphTileHandle>,
     tile_id: GraphId,
     edge_index_offset: usize,
-    reader: &DirectoryTileProvider,
+    reader: &DirectoryGraphTileProvider,
     tile_set: &HashMap<GraphId, usize>,
     processed_edges: &Mutex<BitSet>,
     progress_bar: &Option<ProgressBar>,
