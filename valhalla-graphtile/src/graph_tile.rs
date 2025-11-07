@@ -1,4 +1,13 @@
+/// # Routing Graph Tiles
+///
+/// This module provides definitions for Valhalla-compatible routing graph tiles.
+/// Access is defined by the [`GraphTile`] trait.
+/// The memory layout, down to the bit level, is specified in the individual data structures.
+/// Start at the [`GraphTileView`], which can reinterpret a byte slice safely as a tile,
+/// and work down from there as needed.
+/// For writing tiles, a safe builder API is provided in [`GraphTileBuilder`].
 use std::sync::Arc;
+use std::sync::atomic::AtomicPtr;
 use thiserror::Error;
 use zerocopy::{FromBytes, I16, LE, U32, U64, transmute};
 
@@ -8,7 +17,7 @@ use self_cell::self_cell;
 #[cfg(test)]
 use std::sync::LazyLock;
 // To keep files manageable, we will keep internal modules specific to each mega-struct,
-// and publicly re-export the public type.
+// and re-export the public type.
 // Each struct should be tested on fixture tiles to a reasonable level of confidence.
 // Leverage snapshot tests where possible, compare with Valhalla C++ results,
 // and test the first and last elements of variable length vectors
@@ -229,6 +238,55 @@ impl MmapTilePointer {
             let start_ptr = self.mmap.as_ptr().offset(self.offsets.offset as isize);
             // Assumes the offset and size are valid.
             core::slice::from_raw_parts(start_ptr, self.offsets.size as usize)
+        }
+    }
+
+    /// Reads from the mapped range and interprets it as type `T`.
+    ///
+    /// The instance of `T` is created from a _bitwise_ copy of the data.
+    /// This uses [`core::ptr::read_volatile`] under the hood to make sure the I/O actually happens.
+    ///
+    /// # Safety
+    ///
+    /// The approach taken here mirrors that of Valhalla,
+    /// which I'm not sure is fundamentally sound,
+    /// though it may be *practically* acceptable on x86_64 for the places it's used
+    /// (traffic tile access via a shared memory map).
+    ///
+    /// There are a lot of things that can go wrong here.
+    /// The following will likely result in a SIGBUS:
+    ///
+    /// - Truncating the memory mapped file.
+    /// - Remapping or resizing the map.
+    ///
+    /// The following are also obviously unsafe and will cause either a panic or undefined behavior:
+    ///
+    /// - Trying to read a value where `size_of::<T>()` doesn't match the size of the pointer.
+    ///   We statically assert this, and if you fail to uphold this invariant, the program will panic.
+    /// - Reading an offset or size out of bounds.
+    ///
+    /// Finally, while this does force a volatile read,
+    /// NO ATTEMPT IS MADE AT SYNCHRONIZATION!
+    /// This is, again, how Valhalla currently does things.
+    /// There should probably be atomics involved for synchronizing writes,
+    /// but that requires some internal Valhalla evolution which would result in some breaking changes.
+    ///
+    /// As far as I can tell, this is *practically* acceptable if the writer
+    /// is always storing values of a size that are guaranteed to be atomic by the underlying architecture.
+    /// Concretely, this means that **writers must use a larger size integer type
+    /// if fields can span across byte boundaries (as they do in traffic tiles).**
+    pub unsafe fn read_volatile<T>(&self) -> T {
+        assert_eq!(
+            size_of::<T>(),
+            self.offsets
+                .size
+                .try_into()
+                .expect("u32 does not fit into usize... that's unexpected!"),
+            "You can't try an unsafe cast on a byte range of the wrong size!"
+        );
+        unsafe {
+            let ptr = self.mmap.as_ptr().offset(self.offsets.offset as isize) as *const T;
+            ptr.read_volatile()
         }
     }
 }

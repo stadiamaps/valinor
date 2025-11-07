@@ -1,11 +1,11 @@
 #![doc = include_str!("../README.md")]
 
-// Private modules by default
 mod graph_id;
 pub mod graph_tile;
 pub mod shape_codec;
 pub mod tile_hierarchy;
 pub mod tile_provider;
+pub mod traffic_tile;
 
 use enumset::{EnumSet, EnumSetType, enum_set};
 use std::borrow::Cow;

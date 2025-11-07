@@ -53,18 +53,7 @@ pub struct TarballTileProvider {
 }
 
 impl TarballTileProvider {
-    /// Creates a new tarball tile provider from an existing extract.
-    ///
-    /// # Errors
-    ///
-    /// The extract _must_ include an `index.bin` file as the first entry.
-    /// If the file is not _valid_ (of the correct length and superficially correct structure),
-    /// this constructor will fail.
-    ///
-    /// However, no further checks are performed to ensure the correctness of the file
-    /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
-    /// so an incorrect index will invariably lead to tile fetch errors.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+    fn init<P: AsRef<Path>>(path: P, allow_writes: bool) -> Result<Self, GraphTileProviderError> {
         let mut archive = Archive::new(File::open(&path)?);
         let mut entries = archive.entries()?;
 
@@ -113,15 +102,51 @@ impl TarballTileProvider {
         // Explicitly (not strictly necessary) close the archive reader handle
         drop(archive);
 
-        let file = File::open(&path)?;
+        let file = File::options().write(allow_writes).read(true).open(&path)?;
         // TODO: Prewarm and populate options
-        let mmap = Arc::new(MmapOptions::new().map_raw_read_only(&file)?);
+        let mmap = if allow_writes {
+            Arc::new(MmapOptions::new().map_raw(&file)?)
+        } else {
+            Arc::new(MmapOptions::new().map_raw_read_only(&file)?)
+        };
 
         Ok(Self {
             _file: file,
             mmap,
             tile_index,
         })
+    }
+
+    /// Creates a new read-only tarball tile provider from an existing extract.
+    ///
+    /// # Errors
+    ///
+    /// The extract _must_ include an `index.bin` file as the first entry.
+    /// If the file is not _valid_ (of the correct length and superficially correct structure),
+    /// this constructor will fail.
+    ///
+    /// However, no further checks are performed to ensure the correctness of the file
+    /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
+    /// so an incorrect index will invariably lead to tile fetch errors.
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+        Self::init(path, false)
+    }
+
+    /// Creates a new tarball tile provider from an existing extract.
+    ///
+    /// This version allows writes to the underlying memory map.
+    ///
+    /// # Errors
+    ///
+    /// The extract _must_ include an `index.bin` file as the first entry.
+    /// If the file is not _valid_ (of the correct length and superficially correct structure),
+    /// this constructor will fail.
+    ///
+    /// However, no further checks are performed to ensure the correctness of the file
+    /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
+    /// so an incorrect index will invariably lead to tile fetch errors.
+    fn new_mut<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+        Self::init(path, true)
     }
 }
 
@@ -298,14 +323,14 @@ mod test {
     }
 
     #[cfg(not(miri))]
-    #[test]
-    fn test_get_tile() {
+    #[tokio::test]
+    async fn test_get_tile() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles.tar");
         let provider = TarballTileProvider::new(path).expect("Unable to init tile provider");
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-        let tile_pointer = futures::executor::block_on(provider.get_tile_containing(graph_id))
+        let tile_pointer = provider.get_tile_containing(graph_id).await
             .expect("Unable to get tile");
         let tile_bytes = unsafe { tile_pointer.as_tile_bytes() };
         let tile = GraphTileView::try_from(tile_bytes).expect("Unable to deserialize tile");
@@ -346,8 +371,8 @@ mod test {
     // }
 
     #[cfg(not(miri))]
-    #[test]
-    fn test_tiles_are_identical_to_directory() {
+    #[tokio::test]
+    async fn test_tiles_are_identical_to_directory() {
         // This test uses the directory tile provider as an oracle
         // to make sure the tarball reader is working as expected.
         // Probably goes without saying, but the tarball was created using
@@ -377,10 +402,12 @@ mod test {
 
         for graph_id in tile_ids {
             let directory_tile =
-                futures::executor::block_on(directory_provider.get_tile_containing(*graph_id))
+                directory_provider.get_tile_containing(*graph_id)
+                    .await
                     .expect("Unable to get tile");
             let tarball_tile_pointer =
-                futures::executor::block_on(tarball_provider.get_tile_containing(*graph_id))
+                tarball_provider.get_tile_containing(*graph_id)
+                    .await
                     .expect("Unable to get tile");
             let tarball_tile_bytes = unsafe { tarball_tile_pointer.as_tile_bytes() };
 

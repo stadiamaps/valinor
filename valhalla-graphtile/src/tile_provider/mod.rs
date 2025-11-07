@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 mod directory;
 mod tarball;
+mod traffic;
 
 use crate::graph_id::InvalidGraphIdError;
 use crate::graph_tile::{
@@ -14,6 +15,7 @@ use crate::graph_tile::{
 };
 pub use directory::DirectoryGraphTileProvider;
 pub use tarball::TarballTileProvider;
+pub use traffic::TrafficTileProvider;
 
 #[derive(Debug, Error)]
 pub enum GraphTileProviderError {
