@@ -201,8 +201,9 @@ impl TrafficSpeed {
 
 #[cfg(test)]
 mod test {
+    use std::mem::transmute;
     use crate::traffic_tile::TrafficSpeed;
-    use zerocopy::IntoBytes;
+    use zerocopy::{transmute, IntoBytes};
 
     #[test]
     fn test_round_trip() {
@@ -224,10 +225,11 @@ mod test {
         let mut x: u64 = 0;
         let ptr = &mut x as *mut u64;
 
-        let round_tripped_speed = unsafe {
+        let round_tripped_speed: TrafficSpeed = unsafe {
             core::ptr::write(ptr, speed_as_u64);
             // Simulates a read from the memory map
-            std::ptr::read_volatile(ptr as *const TrafficSpeed)
+            let integer_repr = std::ptr::read_volatile(ptr);
+            transmute!(integer_repr)
         };
 
         assert_eq!(round_tripped_speed.has_valid_speed(), true);
