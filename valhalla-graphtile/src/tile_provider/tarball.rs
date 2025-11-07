@@ -330,7 +330,9 @@ mod test {
             .join("andorra-tiles.tar");
         let provider = TarballTileProvider::new(path).expect("Unable to init tile provider");
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-        let tile_pointer = provider.get_tile_containing(graph_id).await
+        let tile_pointer = provider
+            .get_tile_containing(graph_id)
+            .await
             .expect("Unable to get tile");
         let tile_bytes = unsafe { tile_pointer.as_tile_bytes() };
         let tile = GraphTileView::try_from(tile_bytes).expect("Unable to deserialize tile");
@@ -401,14 +403,14 @@ mod test {
             TarballTileProvider::new(tarball_path).expect("Unable to init tile provider");
 
         for graph_id in tile_ids {
-            let directory_tile =
-                directory_provider.get_tile_containing(*graph_id)
-                    .await
-                    .expect("Unable to get tile");
-            let tarball_tile_pointer =
-                tarball_provider.get_tile_containing(*graph_id)
-                    .await
-                    .expect("Unable to get tile");
+            let directory_tile = directory_provider
+                .get_tile_containing(*graph_id)
+                .await
+                .expect("Unable to get tile");
+            let tarball_tile_pointer = tarball_provider
+                .get_tile_containing(*graph_id)
+                .await
+                .expect("Unable to get tile");
             let tarball_tile_bytes = unsafe { tarball_tile_pointer.as_tile_bytes() };
 
             assert_eq!(directory_tile.borrow_owner(), tarball_tile_bytes);

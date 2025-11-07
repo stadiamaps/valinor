@@ -5,7 +5,7 @@
 
 use bitfield_struct::bitfield;
 use thiserror::Error;
-use zerocopy::{transmute, FromBytes, LE, U32, U64};
+use zerocopy::{FromBytes, LE, U32, U64, transmute};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
 /// The bit-level reperesentation signaling that the live speed is not known
@@ -159,7 +159,7 @@ impl TrafficSpeed {
             0 => Some(self.encoded_speed1() << 1),
             1 => Some(self.encoded_speed2() << 1),
             2 => Some(self.encoded_speed3() << 1),
-            _ => panic!("Illegal segment index; must be less than 3")
+            _ => panic!("Illegal segment index; must be less than 3"),
         }
     }
 
@@ -186,9 +186,15 @@ impl TrafficSpeed {
 
         match segment_index {
             0 => self.encoded_speed1() == 0 || self.congestion1() == MAX_CONGESTION_VAL,
-            1 => self.breakpoint1() < 255 && (self.encoded_speed2() == 0 || self.congestion2() == MAX_CONGESTION_VAL),
-            2 => self.breakpoint2() < 255 && (self.encoded_speed3() == 0 || self.congestion3() == MAX_CONGESTION_VAL),
-            _ => panic!("Illegal segment index; must be less than 3")
+            1 => {
+                self.breakpoint1() < 255
+                    && (self.encoded_speed2() == 0 || self.congestion2() == MAX_CONGESTION_VAL)
+            }
+            2 => {
+                self.breakpoint2() < 255
+                    && (self.encoded_speed3() == 0 || self.congestion3() == MAX_CONGESTION_VAL)
+            }
+            _ => panic!("Illegal segment index; must be less than 3"),
         }
     }
 }
@@ -208,7 +214,10 @@ mod test {
             .with_has_incidents(1);
 
         let speed_as_bytes = speed.as_bytes();
-        assert_eq!(speed_as_bytes, [DESIRED_SPEED >> 1, 0, 0, 240, 15, 0, 0, 64]);
+        assert_eq!(
+            speed_as_bytes,
+            [DESIRED_SPEED >> 1, 0, 0, 240, 15, 0, 0, 64]
+        );
         let speed_as_u64 = speed.into_bits().get();
         assert_eq!(speed_as_u64.to_le_bytes(), speed_as_bytes);
 
