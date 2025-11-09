@@ -5,18 +5,12 @@
 
 use bitfield_struct::bitfield;
 use thiserror::Error;
-use zerocopy::{FromBytes, LE, U32, U64, transmute};
+use zerocopy::{LE, U32, U64};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
-/// The bit-level reperesentation signaling that the live speed is not known
+/// The bit-level representation signaling that the live speed is not known
 /// (max value of a 7-bit number)
 const UNKNOWN_TRAFFIC_SPEED_RAW: u8 = (1 << 7) - 1;
-
-/// The maximum allowable traffic speed
-// const MAX_TRAFFIC_SPEED_KPH: u32 = (UNKNOWN_TRAFFIC_SPEED_RAW - 1) << 1;
-
-/// The value (in kph) that signifies a traffic speed is unknown
-// const UNKNOWN_TRAFFIC_SPEED_KPH: u32 = UNKNOWN_TRAFFIC_SPEED_RAW << 1;
 
 const UNKNOWN_CONGESTION_VAL: u8 = 0;
 const MAX_CONGESTION_VAL: u8 = 63;
@@ -201,9 +195,9 @@ impl TrafficSpeed {
 
 #[cfg(test)]
 mod test {
-    use std::mem::transmute;
     use crate::traffic_tile::TrafficSpeed;
-    use zerocopy::{transmute, IntoBytes};
+    use std::mem::transmute;
+    use zerocopy::{IntoBytes, transmute};
 
     #[test]
     fn test_round_trip() {

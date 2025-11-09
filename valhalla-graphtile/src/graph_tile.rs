@@ -1,13 +1,12 @@
-!// # Routing Graph Tiles
-///
-/// This module provides definitions for Valhalla-compatible routing graph tiles.
-/// Access is defined by the [`GraphTile`] trait.
-/// The memory layout, down to the bit level, is specified in the individual data structures.
-/// Start at the [`GraphTileView`], which can reinterpret a byte slice safely as a tile,
-/// and work down from there as needed.
-/// For writing tiles, a safe builder API is provided in [`GraphTileBuilder`].
+//! # Routing Graph Tiles
+//!
+//! This module provides definitions for Valhalla-compatible routing graph tiles.
+//! Access is defined by the [`GraphTile`] trait.
+//! The memory layout, down to the bit level, is specified in the individual data structures.
+//! Start at the [`GraphTileView`], which can reinterpret a byte slice safely as a tile,
+//! and work down from there as needed.
+//! For writing tiles, a safe builder API is provided in [`GraphTileBuilder`].
 use std::sync::Arc;
-use std::sync::atomic::AtomicPtr;
 use thiserror::Error;
 use zerocopy::{FromBytes, I16, LE, U32, U64, transmute};
 

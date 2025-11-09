@@ -48,16 +48,16 @@ const DECODED_SPEED_SIZE: usize = 2 * COEFFICIENT_COUNT;
 /// and a surprisingly measurable (~5 sec -> ~3.5 sec) test execution time on bare metal
 /// (Apple Silicon M1 Max).
 static COS_TABLE: LazyLock<Box<[[f32; COEFFICIENT_COUNT]]>> = LazyLock::new(|| {
-    const {
-        assert!(BUCKETS_PER_WEEK < 2usize.pow(24));
-    }
-
     // DCT-III constants for speed decoding and normalization
     #[expect(
         clippy::cast_precision_loss,
         reason = "BUCKETS_PER_WEEK is always <= 23 bits"
     )]
     const PI_BUCKET_CONST: f32 = std::f32::consts::PI / BUCKETS_PER_WEEK as f32;
+
+    const {
+        assert!(BUCKETS_PER_WEEK < 2usize.pow(24));
+    }
 
     // Uses the trig_const crate to precompute this at compile time within an acceptable range of error.
     // If sqrt is ever made stable in const contexts, we can drop this dependency.
