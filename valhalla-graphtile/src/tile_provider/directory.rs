@@ -14,7 +14,7 @@ use tokio::{
     io::{AsyncWriteExt, BufWriter},
 };
 
-/// A graph tile provider that backed by a directory of tiles.
+/// A graph tile provider that is backed by a directory of tiles.
 ///
 /// # Resource consumption
 ///
