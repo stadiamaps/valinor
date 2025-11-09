@@ -47,7 +47,7 @@ impl TrafficTileProvider {
             },
         };
         let header: TrafficTileHeader = unsafe { header_pointer.read_volatile() };
-        if graph_id.index() > u64::from(header.directed_edge_count()) {
+        if graph_id.index() >= u64::from(header.directed_edge_count()) {
             return Err(GraphTileProviderError::GraphTileLookupError(
                 LookupError::InvalidIndex,
             ));
