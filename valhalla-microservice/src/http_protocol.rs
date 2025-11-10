@@ -11,7 +11,7 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 ///
 /// In Valhalla service workers,
 /// this is passed as the first message in any exchange sequence.
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, Copy, Clone)]
 #[repr(C)]
 pub struct HttpRequestInfo {
     /// The request ID

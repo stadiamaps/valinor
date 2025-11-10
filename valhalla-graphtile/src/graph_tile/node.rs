@@ -108,14 +108,17 @@ pub struct NodeInfo {
     third_bit_field: ThirdBitfield,
     /// Heading information.
     ///
-    /// # Documentation from Valhalla
+    /// # Documentation from Valhalla (lightly cleaned up)
     ///
-    /// For non transit levels, it's the headings of up to kMaxLocalEdgeIndex+1 local edges (rounded to
-    /// nearest 2 degrees)for all other levels.
-    /// Sadly we need to keep this for now because it's used in map matching, otherwise we could remove it
-    /// Also for transit levels (while building data only) it can be used for either the connecting way
-    /// id for matching the connection point of the station to the edge or an encoded lon lat pair for
-    /// the exact connection point. If the highest bit is set it's a lon lat otherwise it's a way id
+    /// For non-transit levels, it's the headings of up to kMaxLocalEdgeIndex+1 local edges
+    /// (rounded to nearest 2 degrees) for all other levels.
+    ///
+    /// Sadly, we need to keep this for now because it's used in map matching.
+    /// Otherwise we could remove it.
+    /// Also for transit levels (while building data only), it can be used for either the connecting way
+    /// ID for matching the connection point of the station to the edge, or an encoded lon/lat pair for
+    /// the exact connection point.
+    /// If the highest bit is set, it's a lon lat otherwise it's a way ID.
     headings: U64<LE>,
 }
 
@@ -325,11 +328,12 @@ impl NodeInfo {
     /// NOTE: Headings are stored rounded to 2 degrees of precision.
     #[inline]
     pub fn heading(&self, local_edge_index: u8) -> Option<u16> {
+        assert!(local_edge_index < 8, "Invalid input (must be 0-7)");
         if local_edge_index > MAX_LOCAL_EDGE_INDEX {
             None
         } else {
             let shift = u64::from(local_edge_index) * 8;
-            #[expect(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "The resulting heading can't lie outside the range.")]
             Some(
                 (((self.headings & (255u64 << shift)) >> shift).get() as f32
                     * HEADING_EXPAND_FACTOR)

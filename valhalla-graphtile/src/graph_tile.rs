@@ -7,6 +7,7 @@
 //! and work down from there as needed.
 //! For writing tiles, a safe builder API is provided in [`GraphTileBuilder`].
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use thiserror::Error;
 use zerocopy::{FromBytes, I16, LE, U32, U64, transmute};
 
@@ -229,7 +230,7 @@ impl MmapTilePointer {
     ///
     /// # Safety
     ///
-    /// The backing memory map must never be mutated during the lifetime of this type.
+    /// The backing memory map must **never** be mutated during the lifetime of the returned slice.
     /// Additionally, we explicitly assume that the index and offsets describe a valid tile.
     pub unsafe fn as_tile_bytes(&self) -> &[u8] {
         unsafe {
@@ -244,6 +245,10 @@ impl MmapTilePointer {
     ///
     /// The instance of `T` is created from a _bitwise_ copy of the data.
     /// This uses [`core::ptr::read_volatile`] under the hood to make sure the I/O actually happens.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the read is not naturally aligned (checked in an assertion).
     ///
     /// # Safety
     ///
@@ -266,14 +271,22 @@ impl MmapTilePointer {
     ///
     /// Finally, while this does force a volatile read,
     /// NO ATTEMPT IS MADE AT SYNCHRONIZATION!
-    /// This is, again, how Valhalla currently does things.
-    /// There should probably be atomics involved for synchronizing writes,
-    /// but that requires some internal Valhalla evolution which would result in some breaking changes.
+    /// This is, regrettably, how Valhalla currently does things.
+    /// There should probably be atomics involved to synchronize writes,
+    /// but that requires some internal Valhalla evolution,
+    /// which would result in some breaking changes.
     ///
     /// As far as I can tell, this is *practically* acceptable if the writer
-    /// is always storing values of a size that are guaranteed to be atomic by the underlying architecture.
+    /// is always storing values of a size that are guaranteed to be atomic
+    /// by the underlying architecture, provided that:
+    ///
+    /// - No logical field ever crosses a _byte_ boundary, OR
+    /// - All reads and writes are naturally aligned AND integer operations are atomic for that size
+    ///   on the architecture AND no logical field crosses a boundary between two such larger width integers
+    ///
     /// Concretely, this means that **writers must use a larger size integer type
-    /// if fields can span across byte boundaries (as they do in traffic tiles).**
+    /// if fields can span across byte boundaries (as they do in traffic tiles)
+    /// as the byte-level reads would permit tearing.**
     pub unsafe fn read_volatile<T>(&self) -> T {
         assert_eq!(
             size_of::<T>(),
@@ -283,9 +296,52 @@ impl MmapTilePointer {
                 .expect("u32 does not fit into usize... that's unexpected!"),
             "You can't try an unsafe cast on a byte range of the wrong size!"
         );
+        // Safety: Assumes that the offset is valid.
         unsafe {
-            let ptr = self.mmap.as_ptr().offset(self.offsets.offset as isize) as *const T;
+            let ptr = self
+                .mmap
+                .as_ptr()
+                .add(self.offsets.offset as usize)
+                .cast::<T>();
+            assert!(ptr.is_aligned());
+
             ptr.read_volatile()
+        }
+    }
+
+    /// Reads an [`AtomicU64`] value pointing at the mapped region.
+    ///
+    /// # Panics
+    ///
+    /// - If `self.offsets.size != 8`.
+    /// - If the pointer is not `align_of::<AtomicU64>()` aligned.
+    ///
+    /// # Safety
+    ///
+    /// The following will likely result in a SIGBUS:
+    ///
+    /// - Truncating the memory mapped file.
+    /// - Remapping or resizing the map.
+    ///
+    /// The following are also obviously unsafe and will cause either a panic or undefined behavior:
+    ///
+    /// - Reading an offset or size out of bounds.
+    /// - Concurrent non-atomic access.
+    pub unsafe fn as_atomic_u64(&self) -> &AtomicU64 {
+        assert_eq!(self.offsets.size, 8);
+        unsafe {
+            // Safety: Assumes that the offset is valid.
+            let ptr = self
+                .mmap
+                .as_mut_ptr()
+                .add(self.offsets.offset as usize)
+                .cast::<u64>();
+            assert!(ptr.cast::<AtomicU64>().is_aligned());
+
+            // Safety: Assumes the pointer is aligned (checked above).
+            // Assumes the pointer is valid for both reads and writes for the whole lifetime
+            // (not explicitly checked, but noted in the method safety comment).
+            AtomicU64::from_ptr(ptr)
         }
     }
 }

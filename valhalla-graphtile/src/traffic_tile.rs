@@ -12,8 +12,8 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 /// (max value of a 7-bit number)
 const UNKNOWN_TRAFFIC_SPEED_RAW: u8 = (1 << 7) - 1;
 
-const UNKNOWN_CONGESTION_VAL: u8 = 0;
-const MAX_CONGESTION_VAL: u8 = 63;
+pub const UNKNOWN_CONGESTION_VAL: u8 = 0;
+pub const MAX_CONGESTION_VAL: u8 = 63;
 
 /// The Valhalla traffic tile version.
 /// See the note on the `traffic_tile_version` field.

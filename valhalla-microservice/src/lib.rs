@@ -123,9 +123,8 @@ impl<F: Fn(Api) -> WorkerResult> ValhallaMicroservice<F> {
         trace!("Handling request ID {}", req_info.id());
 
         // Decode the protobuf frame.
-        let request = Api::decode(protobuf_data.as_ref()).map_err(|e| {
-            Error::InvalidMessage(format!("Failed to decode protobuf frame: {}", e))
-        })?;
+        let request = Api::decode(protobuf_data.as_ref())
+            .map_err(|e| Error::InvalidMessage(format!("Failed to decode protobuf frame: {e}")))?;
 
         //
         // Handle the request
@@ -179,6 +178,7 @@ impl<'a> ValhallaMicroserviceBuilder<'a> {
     ///
     /// Terminal (last in the chain) services never need this,
     /// but others do.
+    #[must_use]
     pub fn with_downstream_socket_endpoint(
         self,
         downstream_socket_endpoint: &'a str,

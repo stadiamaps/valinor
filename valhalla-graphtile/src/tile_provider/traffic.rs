@@ -3,6 +3,7 @@ use crate::graph_tile::{LookupError, MmapTilePointer, TileOffset};
 use crate::tile_provider::{GraphTileProviderError, TarballTileProvider};
 use crate::traffic_tile::{TrafficSpeed, TrafficTileHeader};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 pub struct TrafficTileProvider {
     tarball_tile_provider: TarballTileProvider,
@@ -46,6 +47,13 @@ impl TrafficTileProvider {
                 size: HEADER_SIZE as u32,
             },
         };
+        // Safety: TBH this probably isn't possible to make completely safe
+        // given the current architecture of Valhalla.
+        // However, at the time of this writing, all fields are u32 or u64,
+        // which will *probably* prevent any sort of read/write tearing.
+        // Additionally, Valhalla (at the time of this writing) has no mechanism for hot swapping
+        // the underlying graph, which means we can assume the directed edge count will never change
+        // for a given tile during the life of the program.
         let header: TrafficTileHeader = unsafe { header_pointer.read_volatile() };
         if graph_id.index() >= u64::from(header.directed_edge_count()) {
             return Err(GraphTileProviderError::GraphTileLookupError(
@@ -64,7 +72,12 @@ impl TrafficTileProvider {
             },
         };
 
-        Ok(unsafe { speed_pointer.read_volatile() })
+        // Safety: Assumes the count in the tile header is correct (see above assumptions).
+        // If the header reports a higher than directed edge count, this could read out of bounds.
+        let atomic_handle = unsafe { speed_pointer.as_atomic_u64() };
+        Ok(TrafficSpeed::from_bits(
+            atomic_handle.load(Ordering::Acquire).into(),
+        ))
     }
 }
 

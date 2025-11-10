@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             message = service.tick() => match message {
-                Ok(_) => {
+                Ok(()) => {
                     // All good; carry on...
                 }
                 Err(Error::UpstreamShuttingDown) => {

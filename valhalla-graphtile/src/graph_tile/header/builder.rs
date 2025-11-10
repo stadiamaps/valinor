@@ -226,7 +226,8 @@ impl GraphTileHeaderBuilder {
                 .into(),
             edge_info_offset: u32::try_from(edge_info_offset)?.into(),
             text_list_offset: u32::try_from(text_list_offset)?.into(),
-            create_date: ((self.create_date - VALHALLA_EPOCH).num_days().max(0) as u32).into(),
+            create_date: u32::try_from((self.create_date - VALHALLA_EPOCH).num_days().max(0))?
+                .into(),
             bin_offsets: self.bin_offsets.map(Into::into),
             lane_connectivity_offset: u32::try_from(lane_connectivity_offset)?.into(),
             predicted_speeds_offset: u32::try_from(predicted_speed_offset)?.into(),

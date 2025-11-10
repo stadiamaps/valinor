@@ -35,6 +35,7 @@ impl WorkerResult {
         let mut headers = HeaderMap::new();
         headers.insert(
             CONTENT_TYPE,
+            #[expect(clippy::missing_panics_doc)]
             "application/json;charset=utf-8".parse().unwrap(),
         );
 
