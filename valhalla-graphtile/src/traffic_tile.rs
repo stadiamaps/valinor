@@ -81,7 +81,7 @@ impl TrafficTileHeader {
     from = bit_twiddling_helpers::conv_u64le::from_inner,
     into = bit_twiddling_helpers::conv_u64le::into_inner
 )]
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq, Eq)]
 pub struct TrafficSpeed {
     // The overall speed, with a representable range of 0-255 kph, in 2kph increments.
     #[bits(7)]
@@ -196,8 +196,8 @@ impl TrafficSpeed {
 #[cfg(test)]
 mod test {
     use crate::traffic_tile::TrafficSpeed;
-    use std::mem::transmute;
-    use zerocopy::{IntoBytes, transmute};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use zerocopy::IntoBytes;
 
     #[test]
     fn test_round_trip() {
@@ -223,12 +223,23 @@ mod test {
             // Explicit LE write
             core::ptr::write(ptr, speed_as_u64.to_le());
             // Simulates a read from the memory map
-            std::ptr::read_volatile(ptr as *const TrafficSpeed)
+            core::ptr::read_volatile(ptr as *const TrafficSpeed)
         };
 
         assert_eq!(round_tripped_speed.has_valid_speed(), true);
         assert_eq!(round_tripped_speed.overall_speed(), Some(DESIRED_SPEED));
         assert_eq!(round_tripped_speed.breakpoint1(), 255);
         assert_eq!(round_tripped_speed.has_incidents(), 1);
+
+        // Double sanity check; this is how the internal mmap helpers
+        let atomic = unsafe { AtomicU64::from_ptr(ptr) };
+        let atomic_speeds = TrafficSpeed::from_bits(
+            atomic.load(Ordering::Acquire).into(),
+        );
+        assert_eq!(atomic_speeds.has_valid_speed(), true);
+        assert_eq!(atomic_speeds.overall_speed(), Some(DESIRED_SPEED));
+        assert_eq!(atomic_speeds.breakpoint1(), 255);
+        assert_eq!(atomic_speeds.has_incidents(), 1);
+        assert_eq!(round_tripped_speed, atomic_speeds);
     }
 }
