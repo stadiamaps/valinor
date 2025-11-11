@@ -88,7 +88,7 @@ impl AccessRestriction {
     #[inline]
     pub fn affected_access_modes(&self) -> EnumSet<Access> {
         // TODO: Look at ways to do this with FromBytes; this currently copies
-        // Safety: The access bits are length 12, so invalid representations are impossible.
+        // SAFETY: The access bits are length 12, so invalid representations are impossible.
         unsafe { EnumSet::from_repr_unchecked(self.bitfield.modes().get()) }
     }
 }

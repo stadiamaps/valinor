@@ -235,7 +235,7 @@ struct SeventhBitField {
 
 impl Debug for StopOrLine {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Safety: It doesn't matter if we interpret this wrong as both fields are
+        // SAFETY: It doesn't matter if we interpret this wrong as both fields are
         // packed into a u32.
         unsafe { f.write_fmt(format_args!("StopOrLine {{ raw_value: {} }}", self.line_id)) }
     }
@@ -266,7 +266,7 @@ impl DirectedEdge {
     /// Is this a transit line (buss or rail)?
     #[inline]
     pub const fn end_node_id(&self) -> GraphId {
-        // Safety: We know that the bit field cannot contain a value
+        // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
         unsafe { GraphId::from_id_unchecked(self.first_bitfield.end_node()) }
     }
@@ -440,7 +440,7 @@ impl DirectedEdge {
     /// TODO: Determine the impact of [`self.forward`] on this
     #[inline]
     pub fn forward_access(&self) -> EnumSet<Access> {
-        // Safety: The access bits are length 12, so invalid representations are impossible.
+        // SAFETY: The access bits are length 12, so invalid representations are impossible.
         unsafe { EnumSet::from_repr_unchecked(self.fourth_bitfield.forward_access().get()) }
     }
 
@@ -449,7 +449,7 @@ impl DirectedEdge {
     /// TODO: Determine the impact of `forward` on this
     #[inline]
     pub fn reverse_access(&self) -> EnumSet<Access> {
-        // Safety: The access bits are length 12, so invalid representations are impossible.
+        // SAFETY: The access bits are length 12, so invalid representations are impossible.
         unsafe { EnumSet::from_repr_unchecked(self.fourth_bitfield.reverse_access().get()) }
     }
 }

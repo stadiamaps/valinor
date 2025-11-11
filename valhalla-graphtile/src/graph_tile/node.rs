@@ -143,7 +143,7 @@ impl NodeTransition {
     /// The ID of the corresponding end node on another hierarchy level.
     #[inline]
     pub const fn corresponding_end_node_id(&self) -> GraphId {
-        // Safety: We know that the bit field cannot contain a value
+        // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
         unsafe { GraphId::from_id_unchecked(self.end_node_id()) }
     }
@@ -179,7 +179,7 @@ impl NodeInfo {
     #[inline]
     pub fn access(&self) -> EnumSet<Access> {
         // TODO: Look at ways to do this with FromBytes; this currently copies
-        // Safety: The access bits are length 12, so invalid representations are impossible.
+        // SAFETY: The access bits are length 12, so invalid representations are impossible.
         unsafe { EnumSet::from_repr_unchecked(self.first_bit_field.access().get()) }
     }
 

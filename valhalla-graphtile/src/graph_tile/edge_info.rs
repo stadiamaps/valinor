@@ -156,7 +156,7 @@ impl EdgeInfo<'_> {
     #[inline]
     pub fn bicycle_network(&self) -> EnumSet<BicycleNetwork> {
         // TODO: Look at ways to do this with FromBytes; this currently copies
-        // Safety: The access bits are length 4, so invalid representations are impossible.
+        // SAFETY: The access bits are length 4, so invalid representations are impossible.
         unsafe { EnumSet::from_repr_unchecked(self.inner.first_inner_bitfield.bike_network()) }
     }
 

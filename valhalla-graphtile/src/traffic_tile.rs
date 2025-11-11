@@ -249,7 +249,6 @@ impl TrafficSpeed {
 #[cfg(test)]
 mod test {
     use crate::traffic_tile::TrafficSpeed;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use zerocopy::IntoBytes;
 
     #[test]

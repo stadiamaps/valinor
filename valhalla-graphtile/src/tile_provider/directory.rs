@@ -180,10 +180,11 @@ mod test {
 
     // NOTE: In most projects, these tests would be written with #[tokio::test] for simplicity.
     // We avoid that in our tests to enable greater compatibility under Miri.
-    // Miri support for syscalls on non-Linux platforms, even Tier 1 ones,
-    // is limited, and Tokio uses kqueue on macOS (and presumably FreeBSD).
+    // Miri support for syscalls on non-Linux platforms, even Tier 1 ones, is limited.
+    // Tokio uses kqueue on macOS (and presumably FreeBSD) internally,
+    // which is not implemented in miri.
     // Our use case does not require any sort of work stealing or complex dependencies,
-    // so we use the blocking executor directly to drive futures completion.
+    // so we use the blocking executor directly to drive futures to completion.
 
     #[test]
     fn test_get_tile() {

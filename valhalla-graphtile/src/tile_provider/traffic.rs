@@ -4,6 +4,30 @@ use crate::tile_provider::{GraphTileProviderError, TarballTileProvider};
 use crate::traffic_tile::{TrafficSpeed, TrafficTileHeader};
 use std::path::Path;
 
+/// The traffic tarball tile provider.
+///
+/// This provides an interface to querying and (in some cases)
+/// writing data.
+///
+/// # Safety
+///
+/// This structure is entirely safe in read-only mode when it is the only consumer of the `mmap`,
+/// and can guarantee that the file/shared memory are not modified externally.
+/// Otherwise, the situation gets a bit more complicated.
+///
+/// Whether this struct (and the backing memory map) support mutability is determined
+/// by the value of the const generic parameter `MUT`.
+/// When `MUT` is `false` methods enabling mutation are hidden.
+///
+/// Given the inherently unsafe nature of working with shared mutable memory this way
+/// (a random process can modify your memory _at any time_),
+/// we use exclusively volatile memory operations internally.
+/// Unfortunately, Rust does not have a great way to ensure everything is as specified as we'd like,
+/// and there is not clear consensus on what mix of atomics and volatile are the "correct" way
+/// to do shared `mmap`'d files.
+///
+/// **It is the responsibility of the caller to ensure that the platform is able to perform
+/// loads and stores of 64-bit values atomically.**
 pub struct TrafficTileProvider<const MUT: bool> {
     tarball_tile_provider: TarballTileProvider<MUT>,
 }
@@ -29,16 +53,23 @@ impl<const MUT: bool> TrafficTileProvider<MUT> {
 
     /// Gets speed information for the edge identified by `graph_id`.
     ///
+    /// # Safety
+    ///
+    /// Basically assumes pointer alignment (will panic otherwise) and that the edge info is valid.
+    /// See the [type-level documentation](TrafficTileProvider) for details.
+    ///
     /// # Errors
     ///
     /// Fails if the edge doesn't exist in the traffic tile.
-    pub async fn get_speeds_for_edge(
+    pub async unsafe fn get_speeds_for_edge(
         &self,
         graph_id: GraphId,
     ) -> Result<TrafficSpeed, GraphTileProviderError> {
-        let speed_pointer = self.get_pointer_for_edge(graph_id).await?;
+        // SAFETY: Assumes the header is present and valid,
+        // by assuming we are the only writer process.
+        let speed_pointer = unsafe { self.get_pointer_for_edge(graph_id).await? };
 
-        // Safety: Assumes the count in the tile header is correct (see above assumptions).
+        // SAFETY: Assumes the count in the tile header is correct (see above assumptions).
         // If the header reports a higher than directed edge count, this could read out of bounds.
         // Also assumes that the architecture is able to guarantee atomicity of the operation
         // (no torn reads/writes).
@@ -50,8 +81,13 @@ impl<const MUT: bool> TrafficTileProvider<MUT> {
         }))
     }
 
-    #[cfg(target_has_atomic = "8")]
-    async fn get_pointer_for_edge(
+    /// Gets a pointer structure for the given edge.
+    ///
+    /// # Safety
+    ///
+    /// Assumes that the header is present and valid.
+    /// It is the responsibility of the caller to ensure this.
+    async unsafe fn get_pointer_for_edge(
         &self,
         graph_id: GraphId,
     ) -> Result<MmapTilePointer, GraphTileProviderError> {
@@ -71,7 +107,7 @@ impl<const MUT: bool> TrafficTileProvider<MUT> {
             },
         };
 
-        // Safety: TBH this probably isn't possible to make completely safe
+        // SAFETY: TBH this probably isn't possible to make completely safe
         // given the current architecture of Valhalla and fundamental unsafety of shared memory maps.
         // However, at the time of this writing, all fields are u32 or u64,
         // which will *probably* prevent any sort of read/write tearing.
@@ -153,17 +189,25 @@ impl TrafficTileProvider<true> {
     /// but it does not guarantee that the data has been durably stored until you call
     /// [`TrafficTileProvider<true>::flush`]!
     ///
+    /// # Safety
+    ///
+    /// Basically assumes pointer alignment (will panic otherwise) and that the edge info is valid.
+    /// Additionally, this assumes that the platform supports atomic 64-bit integer store operations.
+    /// See the [type-level documentation](TrafficTileProvider) for details.
+    ///
     /// # Errors
     ///
     /// Fails if the edge doesn't exist in the traffic tile.
-    pub async fn update_speed_for_edge(
+    pub async unsafe fn update_speed_for_edge(
         &self,
         graph_id: GraphId,
         speed: TrafficSpeed,
     ) -> Result<(), GraphTileProviderError> {
-        let speed_pointer = self.get_pointer_for_edge(graph_id).await?;
+        // SAFETY: Assumes the header is present and valid,
+        // by assuming we are the only writer process.
+        let speed_pointer = unsafe { self.get_pointer_for_edge(graph_id).await? };
 
-        // Safety: Assumes the count in the tile header is correct (see above assumptions).
+        // SAFETY: Assumes the count in the tile header is correct (see above assumptions).
         // If the header reports a higher than directed edge count, this could read out of bounds.
         // Also assumes the memory is writable (would panic if not) and aligned (checked internally).
         unsafe { speed_pointer.write_volatile(speed) };
@@ -188,20 +232,24 @@ mod tests {
 
         // This edge has no speed info
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-        let edge_speed = provider
-            .get_speeds_for_edge(graph_id)
-            .await
-            .expect("Unable to get tile");
+        let edge_speed = unsafe {
+            provider
+                .get_speeds_for_edge(graph_id)
+                .await
+                .expect("Unable to get tile")
+        };
 
         assert!(!edge_speed.has_valid_speed());
 
         // This edge DOES have speed info
         let graph_id =
             GraphId::try_from_components(0, 3015, 42).expect("Unable to create graph ID");
-        let edge_speed = provider
-            .get_speeds_for_edge(graph_id)
-            .await
-            .expect("Unable to get speed");
+        let edge_speed = unsafe {
+            provider
+                .get_speeds_for_edge(graph_id)
+                .await
+                .expect("Unable to get speed")
+        };
 
         assert_eq!(edge_speed.overall_speed(), Some(32));
     }
@@ -221,22 +269,32 @@ mod tests {
             TrafficTileProvider::new_mutable(tmp_path).expect("Unable to init tile provider");
         let graph_id =
             GraphId::try_from_components(0, 3015, 42).expect("Unable to create graph ID");
-        let edge_speed = provider
-            .get_speeds_for_edge(graph_id)
-            .await
-            .expect("Unable to get speed");
+        let edge_speed = unsafe {
+            provider
+                .get_speeds_for_edge(graph_id)
+                .await
+                .expect("Unable to get speed")
+        };
 
-        assert_eq!(edge_speed.overall_speed(), Some(32), "It looks like the traffic tar may have been cached from a previous run");
+        assert_eq!(
+            edge_speed.overall_speed(),
+            Some(32),
+            "It looks like the traffic tar may have been cached from a previous run"
+        );
 
-        provider
-            .update_speed_for_edge(graph_id, TrafficSpeed::single_speed(DESIRED_SPEED).unwrap())
-            .await
-            .expect("Failed to set speed for edge");
+        unsafe {
+            provider
+                .update_speed_for_edge(graph_id, TrafficSpeed::single_speed(DESIRED_SPEED).unwrap())
+                .await
+                .expect("Failed to set speed for edge");
+        }
 
-        let edge_speed = provider
-            .get_speeds_for_edge(graph_id)
-            .await
-            .expect("Unable to get speed");
+        let edge_speed = unsafe {
+            provider
+                .get_speeds_for_edge(graph_id)
+                .await
+                .expect("Unable to get speed")
+        };
         assert!(edge_speed.has_valid_speed());
         assert_eq!(edge_speed.overall_speed(), Some(DESIRED_SPEED));
     }

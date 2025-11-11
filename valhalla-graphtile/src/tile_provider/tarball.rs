@@ -24,22 +24,20 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 /// will write this automatically, but if you're still hand-rolling tarballs with a `bash` script,
 /// Valinor won't touch those (initialization will fail with an error).
 ///
-/// # Overwrite safety
+/// # Safety
 ///
 /// The following actions are *definitely* unsafe:
 ///
-/// - Changing the index.
+/// - Changing the contents of the index file.
 /// - By extension, changing the set of tiles mapped.
-/// - And finally, also by extension, changing the size of a tile.
-///   (Exception: incident tiles have a mechanism for handling this with an atomic flag.)
+/// - Also by extension, changing the size of a tile.
 /// - Truncating the file.
 ///
 /// Violating any of the above will result in either failed tile fetches (with an error)
 /// or a SIGBUS.
 ///
-/// Additionally, while it seems theoretically possible to introduce safety in the future,
-/// there is no API at the moment which can guarantee the absence of undefined behavior
-/// when the underlying data changes.
+/// Additionally, extreme care must be taken when the file may be modified by an external process.
+/// The current implementation is primarily designed around volatile memory access.
 pub struct TarballTileProvider<const MUT: bool> {
     /// The file backing the mmap.
     ///
@@ -224,7 +222,7 @@ pub struct TileIndexBinEntry {
 
 impl TileIndexBinEntry {
     fn graph_id(&self) -> Result<GraphId, GraphTileProviderError> {
-        // Safety: We know that the bit field cannot contain a value
+        // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
         // Therefore, this is guaranteed to be a valid Graph ID bit pattern.
         let graph_id = unsafe { GraphId::from_id_unchecked(self.tile_id.into()) };

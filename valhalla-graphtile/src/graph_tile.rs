@@ -295,7 +295,10 @@ impl MmapTilePointer {
                 .expect("u32 does not fit into usize... that's unexpected!"),
             "You can't try an unsafe cast on a byte range of the wrong size!"
         );
-        // Safety: Assumes that the offset is valid.
+        // SAFETY: Assumes that the offset is valid.
+        // The pointer arithmetic must never be greater than isize::MAX,
+        // which we satisfy implicitly as it is of type `u32` and we do not support
+        // any CPU with pointers smaller than 64-bits.
         unsafe {
             let ptr = self
                 .mmap
@@ -355,7 +358,7 @@ impl MmapTilePointer {
 
         assert_eq!(self.offsets.size, size_of::<T>() as u32);
         unsafe {
-            // Safety: Assumes that the offset is valid.
+            // SAFETY: Assumes that the offset is valid.
             let ptr = self
                 .mmap
                 .as_mut_ptr()
