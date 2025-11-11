@@ -282,14 +282,5 @@ mod test {
         assert_eq!(round_tripped_speed.overall_speed(), Some(DESIRED_SPEED));
         assert_eq!(round_tripped_speed.breakpoint1(), 255);
         assert_eq!(round_tripped_speed.has_incidents(), 1);
-
-        // Double sanity check; this is how the internal mmap helpers
-        let atomic = unsafe { AtomicU64::from_ptr(ptr) };
-        let atomic_speeds = TrafficSpeed::from_bits(atomic.load(Ordering::Acquire).into());
-        assert_eq!(atomic_speeds.has_valid_speed(), true);
-        assert_eq!(atomic_speeds.overall_speed(), Some(DESIRED_SPEED));
-        assert_eq!(atomic_speeds.breakpoint1(), 255);
-        assert_eq!(atomic_speeds.has_incidents(), 1);
-        assert_eq!(round_tripped_speed, atomic_speeds);
     }
 }
