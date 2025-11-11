@@ -12,6 +12,9 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 /// (max value of a 7-bit number)
 const UNKNOWN_TRAFFIC_SPEED_RAW: u8 = (1 << 7) - 1;
 
+/// The bit-level representation signaling that the road is closed
+const CLOSED_TRAFFIC_SPEED_RAW: u8 = 0;
+
 pub const UNKNOWN_CONGESTION_VAL: u8 = 0;
 pub const MAX_CONGESTION_VAL: u8 = 63;
 
@@ -83,7 +86,13 @@ impl TrafficTileHeader {
 )]
 #[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq, Eq)]
 pub struct TrafficSpeed {
-    // The overall speed, with a representable range of 0-255 kph, in 2kph increments.
+    /// The overall speed, with a representable range of 0-255 kph, in 2kph increments.
+    ///
+    /// Magic values:
+    /// * 0 - road closed
+    /// * 127 (the max 7-bit number = 255 if it were a real speed) - unknown speed
+    ///
+    /// This value is assumed to be invalid (unknown speed) if `breakpoint1` is 0.
     #[bits(7)]
     overall_encoded_speed: u8,
     // Segment encoded speeds, which divide the edge into (up to) 3 segments.
@@ -118,7 +127,8 @@ pub struct TrafficSpeed {
 
 // FIXME: These APIs are straight ports, but they kinda suck.
 impl TrafficSpeed {
-    /// Returns true if the edge has a valid speed value.
+    /// Returns true if the edge has valid speed information.
+    /// NB: This information may indicate that the road is closed.
     #[inline]
     pub const fn has_valid_speed(&self) -> bool {
         self.breakpoint1() != 0 && self.overall_encoded_speed() != UNKNOWN_TRAFFIC_SPEED_RAW
@@ -157,17 +167,18 @@ impl TrafficSpeed {
         }
     }
 
-    /// Returns true if the edge is totally closed.
+    /// Returns true if the edge is at least partially closed.
     ///
     /// Note that it may be partially closed, so check [`TrafficSpeed::is_segment_closed`] too!
+    /// TODO: Figure out the nuance of how this is actually used. The Valhalla docs aren't super clear.
     #[inline]
-    pub const fn is_completely_closed(&self) -> bool {
-        self.breakpoint1() != 0 && self.overall_encoded_speed() != UNKNOWN_TRAFFIC_SPEED_RAW
+    pub const fn is_at_least_partially_closed(&self) -> bool {
+        self.breakpoint1() != 0 && self.overall_encoded_speed() == CLOSED_TRAFFIC_SPEED_RAW
     }
 
     /// Returns true if a specific segment is closed.
     ///
-    /// Note that it may be partially closed, so check [`TrafficSpeed::is_completely_closed`] too!
+    /// Note that it may be partially closed, so check [`TrafficSpeed::is_at_least_partially_closed`] too!
     ///
     /// # Panics
     ///
@@ -178,18 +189,60 @@ impl TrafficSpeed {
             return false;
         }
 
+        // TODO: Revisit this API...
         match segment_index {
-            0 => self.encoded_speed1() == 0 || self.congestion1() == MAX_CONGESTION_VAL,
+            0 => {
+                self.encoded_speed1() == CLOSED_TRAFFIC_SPEED_RAW
+                    || self.congestion1() == MAX_CONGESTION_VAL
+            }
             1 => {
                 self.breakpoint1() < 255
-                    && (self.encoded_speed2() == 0 || self.congestion2() == MAX_CONGESTION_VAL)
+                    && (self.encoded_speed2() == CLOSED_TRAFFIC_SPEED_RAW
+                        || self.congestion2() == MAX_CONGESTION_VAL)
             }
             2 => {
                 self.breakpoint2() < 255
-                    && (self.encoded_speed3() == 0 || self.congestion3() == MAX_CONGESTION_VAL)
+                    && (self.encoded_speed3() == CLOSED_TRAFFIC_SPEED_RAW
+                        || self.congestion3() == MAX_CONGESTION_VAL)
             }
             _ => panic!("Illegal segment index; must be less than 3"),
         }
+    }
+
+    // Builder methods
+
+    /// Constructs a new [`TrafficSpeed`] where a single speed is applied to the entire edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns `None` if the speed is zero or 255.
+    /// These values are reserved.
+    /// Use [`TrafficSpeed::closed`] or [`TrafficSpeed::default`] respectively instead.
+    #[inline]
+    pub const fn single_speed(speed: u8) -> Option<Self> {
+        if speed == CLOSED_TRAFFIC_SPEED_RAW || speed == UNKNOWN_TRAFFIC_SPEED_RAW {
+            return None;
+        }
+
+        Some(
+            Self::new()
+                .with_overall_encoded_speed(speed >> 1)
+                .with_breakpoint1(255),
+        )
+    }
+
+    /// Constructs a new [`TrafficSpeed`] indicating that the edge is closed.
+    #[inline]
+    pub const fn closed() -> Self {
+        Self::new()
+            .with_overall_encoded_speed(CLOSED_TRAFFIC_SPEED_RAW)
+            .with_breakpoint1(255)
+    }
+
+    /// Returns a new instance indicating that there is an incident tile containing this edge.
+    #[inline]
+    pub const fn with_incident_tile_bit(self) -> Self {
+        self.with_has_incidents(1)
     }
 }
 
@@ -203,10 +256,9 @@ mod test {
     fn test_round_trip() {
         const DESIRED_SPEED: u8 = 42;
 
-        let speed = TrafficSpeed::new()
-            .with_overall_encoded_speed(DESIRED_SPEED >> 1)
-            .with_breakpoint1(255)
-            .with_has_incidents(1);
+        let speed = TrafficSpeed::single_speed(DESIRED_SPEED)
+            .unwrap()
+            .with_incident_tile_bit();
 
         let speed_as_bytes = speed.as_bytes();
         assert_eq!(
@@ -233,9 +285,7 @@ mod test {
 
         // Double sanity check; this is how the internal mmap helpers
         let atomic = unsafe { AtomicU64::from_ptr(ptr) };
-        let atomic_speeds = TrafficSpeed::from_bits(
-            atomic.load(Ordering::Acquire).into(),
-        );
+        let atomic_speeds = TrafficSpeed::from_bits(atomic.load(Ordering::Acquire).into());
         assert_eq!(atomic_speeds.has_valid_speed(), true);
         assert_eq!(atomic_speeds.overall_speed(), Some(DESIRED_SPEED));
         assert_eq!(atomic_speeds.breakpoint1(), 255);

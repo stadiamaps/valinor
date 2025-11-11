@@ -40,7 +40,7 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 /// Additionally, while it seems theoretically possible to introduce safety in the future,
 /// there is no API at the moment which can guarantee the absence of undefined behavior
 /// when the underlying data changes.
-pub struct TarballTileProvider {
+pub struct TarballTileProvider<const MUT: bool> {
     /// The file backing the mmap.
     ///
     /// This is unused, but we need to keep it in scope since the memmap only has a reference to it,
@@ -52,8 +52,8 @@ pub struct TarballTileProvider {
     tile_index: HashMap<GraphId, TileOffset>,
 }
 
-impl TarballTileProvider {
-    fn init<P: AsRef<Path>>(path: P, allow_writes: bool) -> Result<Self, GraphTileProviderError> {
+impl<const MUT: bool> TarballTileProvider<MUT> {
+    fn init<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
         let mut archive = Archive::new(File::open(&path)?);
         let mut entries = archive.entries()?;
 
@@ -102,9 +102,9 @@ impl TarballTileProvider {
         // Explicitly (not strictly necessary) close the archive reader handle
         drop(archive);
 
-        let file = File::options().write(allow_writes).read(true).open(&path)?;
+        let file = File::options().write(MUT).read(true).open(&path)?;
         // TODO: Prewarm and populate options
-        let mmap = if allow_writes {
+        let mmap = if MUT {
             Arc::new(MmapOptions::new().map_raw(&file)?)
         } else {
             Arc::new(MmapOptions::new().map_raw_read_only(&file)?)
@@ -117,7 +117,7 @@ impl TarballTileProvider {
         })
     }
 
-    /// Creates a new read-only tarball tile provider from an existing extract.
+    /// Creates a new tarball tile provider from an existing extract.
     ///
     /// # Errors
     ///
@@ -129,29 +129,12 @@ impl TarballTileProvider {
     /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
     /// so an incorrect index will invariably lead to tile fetch errors.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
-        Self::init(path, false)
-    }
-
-    /// Creates a new tarball tile provider from an existing extract.
-    ///
-    /// This version allows writes to the underlying memory map.
-    ///
-    /// # Errors
-    ///
-    /// The extract _must_ include an `index.bin` file as the first entry.
-    /// If the file is not _valid_ (of the correct length and superficially correct structure),
-    /// this constructor will fail.
-    ///
-    /// However, no further checks are performed to ensure the correctness of the file
-    /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
-    /// so an incorrect index will invariably lead to tile fetch errors.
-    fn new_mut<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
-        Self::init(path, true)
+        Self::init(path)
     }
 }
 
-// This can't currently implement the trait because it operates on unowned data.
-impl TarballTileProvider {
+// This can't currently implement the existing trait because it operates on unowned data.
+impl<const MUT: bool> TarballTileProvider<MUT> {
     pub async fn get_tile_containing(
         &self,
         graph_id: GraphId,
@@ -165,6 +148,48 @@ impl TarballTileProvider {
             mmap: self.mmap.clone(),
             offsets: *offsets,
         })
+    }
+}
+
+impl TarballTileProvider<false> {
+    /// Creates a new tarball tile provider from an existing extract.
+    ///
+    /// # Errors
+    ///
+    /// The extract _must_ include an `index.bin` file as the first entry.
+    /// If the file is not _valid_ (of the correct length and superficially correct structure),
+    /// this constructor will fail.
+    ///
+    /// However, no further checks are performed to ensure the correctness of the file
+    /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
+    /// so an incorrect index will invariably lead to tile fetch errors.
+    pub fn new_readonly<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+        Self::new(path)
+    }
+}
+
+impl TarballTileProvider<true> {
+    /// Creates a new tarball tile provider from an existing extract.
+    /// Write support is enabled by this constructor.
+    ///
+    /// # Errors
+    ///
+    /// The extract _must_ include an `index.bin` file as the first entry.
+    /// If the file is not _valid_ (of the correct length and superficially correct structure),
+    /// this constructor will fail.
+    ///
+    /// However, no further checks are performed to ensure the correctness of the file
+    /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
+    /// so an incorrect index will invariably lead to tile fetch errors.
+    pub fn new_mutable<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+        Self::new(path)
+    }
+
+    /// Flushes outstanding memory map modifications to disk.
+    ///
+    /// See [`MmapRaw::flush`] for more details.
+    pub fn flush(&self) -> std::io::Result<()> {
+        self.mmap.flush()
     }
 }
 
@@ -328,7 +353,8 @@ mod test {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles.tar");
-        let provider = TarballTileProvider::new(path).expect("Unable to init tile provider");
+        let provider: TarballTileProvider<false> =
+            TarballTileProvider::new(path).expect("Unable to init tile provider");
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile_pointer = provider
             .get_tile_containing(graph_id)
@@ -400,7 +426,7 @@ mod test {
             .join("fixtures")
             .join("andorra-tiles.tar");
         let tarball_provider =
-            TarballTileProvider::new(tarball_path).expect("Unable to init tile provider");
+            TarballTileProvider::new_readonly(tarball_path).expect("Unable to init tile provider");
 
         for graph_id in tile_ids {
             let directory_tile = directory_provider

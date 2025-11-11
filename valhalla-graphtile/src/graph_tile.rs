@@ -7,7 +7,6 @@
 //! and work down from there as needed.
 //! For writing tiles, a safe builder API is provided in [`GraphTileBuilder`].
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use thiserror::Error;
 use zerocopy::{FromBytes, I16, LE, U32, U64, transmute};
 
@@ -309,12 +308,17 @@ impl MmapTilePointer {
         }
     }
 
-    /// Reads an [`AtomicU64`] value pointing at the mapped region.
+    /// Writes the value to the mapped range.
+    ///
+    /// This will fail to compile if lock-free atomics are not supported for the current target
+    /// for types of `size_of::<T>()`.
+    /// This is statically checked at compile time.
+    /// More on this later...
     ///
     /// # Panics
     ///
-    /// - If `self.offsets.size != 8`.
-    /// - If the pointer is not `align_of::<AtomicU64>()` aligned.
+    /// - If `self.offsets.size` does not match the size of type `T` (clearly incorrect).
+    /// - If the pointer is not aligned for type `T` (no major platform guarantees atomicity).
     ///
     /// # Safety
     ///
@@ -326,22 +330,40 @@ impl MmapTilePointer {
     /// The following are also obviously unsafe and will cause either a panic or undefined behavior:
     ///
     /// - Reading an offset or size out of bounds.
-    /// - Concurrent non-atomic access.
-    pub unsafe fn as_atomic_u64(&self) -> &AtomicU64 {
-        assert_eq!(self.offsets.size, 8);
+    /// - Language specs indicate that unsynchronized concurrent reads and writes are UB.
+    ///   By making reads and writes volatile, we mitigate one source of uncertainty,
+    ///   instructing the compiler that it can never optimize these away.
+    ///   However, shared memory maps have NO inherent synchronization.
+    ///   The check for lock-free atomics on the target for this value size _typically_ indicates
+    ///   that loads and stores **to memory** are atomic for naturally aligned pointers.
+    ///   This implies nothing about _ordering_, but it does protect against torn writes.
+    pub unsafe fn write_volatile<T>(&self, value: T) -> () {
+        const {
+            let has_atomic = match size_of::<T>() {
+                1 => cfg!(target_has_atomic = "8"),
+                2 => cfg!(target_has_atomic = "16"),
+                4 => cfg!(target_has_atomic = "32"),
+                8 => cfg!(target_has_atomic = "64"),
+                16 => cfg!(target_has_atomic = "128"),
+                _ => false,
+            };
+            assert!(
+                has_atomic,
+                "This type does not have a lock-free atomic support (it's probably too wide) on your current target."
+            );
+        };
+
+        assert_eq!(self.offsets.size, size_of::<T>() as u32);
         unsafe {
             // Safety: Assumes that the offset is valid.
             let ptr = self
                 .mmap
                 .as_mut_ptr()
                 .add(self.offsets.offset as usize)
-                .cast::<u64>();
-            assert!(ptr.cast::<AtomicU64>().is_aligned());
+                .cast::<T>();
+            assert!(ptr.is_aligned());
 
-            // Safety: Assumes the pointer is aligned (checked above).
-            // Assumes the pointer is valid for both reads and writes for the whole lifetime
-            // (not explicitly checked, but noted in the method safety comment).
-            AtomicU64::from_ptr(ptr)
+            ptr.write_volatile(value);
         }
     }
 }

@@ -333,7 +333,11 @@ impl NodeInfo {
             None
         } else {
             let shift = u64::from(local_edge_index) * 8;
-            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "The resulting heading can't lie outside the range.")]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "The resulting heading can't lie outside the range."
+            )]
             Some(
                 (((self.headings & (255u64 << shift)) >> shift).get() as f32
                     * HEADING_EXPAND_FACTOR)
