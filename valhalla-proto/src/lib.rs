@@ -5,10 +5,6 @@ pub use proto::*;
 // Re-export protobuf lib (for the traits)
 pub use prost;
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
