@@ -1,4 +1,4 @@
-use super::{GraphTileProvider, GraphTileProviderError, OwnedGraphTileProvider};
+use super::{GraphTileProvider, GraphTileProviderError};
 use crate::GraphId;
 use crate::graph_tile::handles::MmapGraphTileHandle;
 use crate::graph_tile::{
@@ -143,6 +143,8 @@ impl<const MUT: bool> TarballTileProvider<MUT> {
 }
 
 impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
+    type TileHandle = MmapGraphTileHandle;
+
     #[inline]
     fn with_tile_containing<F, T>(
         &self,
@@ -159,6 +161,19 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
         let tile_bytes = unsafe { tile_pointer.as_tile_bytes() };
         let tile = GraphTileView::try_from(tile_bytes)?;
         Ok(process(&tile))
+    }
+
+    #[inline]
+    fn get_handle_for_tile_containing(
+        &self,
+        graph_id: GraphId,
+    ) -> Result<Self::TileHandle, GraphTileProviderError> {
+        let pointer = self.get_pointer_for_tile_containing(graph_id)?;
+
+        // SAFETY: Assumes that the pointer is to a valid graph tile.
+        // Since we just got this from get_pointer_for_tile_containing, this should be safe enough.
+        // The backing memory is assumed to never be mutated during the lifetime of the returned handle.
+        Ok(unsafe { MmapGraphTileHandle::try_from(pointer)? })
     }
 
     fn enumerate_tiles_within_radius<N: CoordFloat + FromPrimitive>(
@@ -251,20 +266,6 @@ impl TarballTileProvider<true> {
     }
 }
 
-impl<const MUT: bool> OwnedGraphTileProvider<MmapGraphTileHandle> for TarballTileProvider<MUT> {
-    fn get_handle_for_tile_containing(
-        &self,
-        graph_id: GraphId,
-    ) -> Result<MmapGraphTileHandle, GraphTileProviderError> {
-        let pointer = self.get_pointer_for_tile_containing(graph_id)?;
-
-        // SAFETY: Assumes that the pointer is to a valid graph tile.
-        // Since we just got this from get_pointer_for_tile_containing, this should be safe enough.
-        // The backing memory is assumed to never be mutated during the lifetime of the returned handle.
-        Ok(unsafe { MmapGraphTileHandle::try_from(pointer)? })
-    }
-}
-
 /// A tile index entry enabling efficient random access into a tarball archive.
 ///
 /// # The `index.bin` file
@@ -345,7 +346,7 @@ pub fn parse_index_bin(index_bytes: &[u8]) -> Result<&[TileIndexBinEntry], Graph
 mod test {
     use super::*;
     use crate::graph_tile::{GraphTile, GraphTileView};
-    use crate::tile_provider::{DirectoryGraphTileProvider, OwnedGraphTileProvider};
+    use crate::tile_provider::DirectoryGraphTileProvider;
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
 

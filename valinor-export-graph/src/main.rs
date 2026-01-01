@@ -13,7 +13,7 @@ use tracing_subscriber::{EnvFilter, Layer};
 use valhalla_graphtile::graph_tile::{DirectedEdge, GraphTile, GraphTileView};
 use valhalla_graphtile::tile_hierarchy::STANDARD_LEVELS;
 use valhalla_graphtile::tile_provider::{
-    DirectoryGraphTileProvider, GraphTileProvider, GraphTileProviderError, OwnedGraphTileProvider,
+    DirectoryGraphTileProvider, GraphTileProvider, GraphTileProviderError,
 };
 use valhalla_graphtile::{GraphId, RoadUse};
 

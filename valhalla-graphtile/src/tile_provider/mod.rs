@@ -49,6 +49,8 @@ pub enum GraphTileProviderError {
 }
 
 pub trait GraphTileProvider {
+    type TileHandle: GraphTile;
+
     /// Gets the tile containing the given graph ID,
     /// and does some work in a closure which takes the reference as a parameter.
     ///
@@ -70,6 +72,26 @@ pub trait GraphTileProvider {
     ) -> Result<T, GraphTileProviderError>
     where
         F: FnOnce(&GraphTileView) -> T;
+
+    /// Gets a tile containing the given graph ID.
+    ///
+    /// The result is an owned handle to a graph tile,
+    /// which implements the [`GraphTile`](GraphTile) trait.
+    ///
+    /// # Performance
+    ///
+    /// Implementations SHOULD ensure that this method incurs only minimal (near zero)
+    /// overhead.
+    ///
+    /// # Errors
+    ///
+    /// This operation may fail for several reasons,
+    /// including the tile not existing, I/O errors, and more.
+    /// Refer to [`GraphTileProviderError`] for details.
+    fn get_handle_for_tile_containing(
+        &self,
+        graph_id: GraphId,
+    ) -> Result<Self::TileHandle, GraphTileProviderError>;
 
     /// Enumerate base tile Graph IDs across all hierarchy levels that intersect a circle around
     /// `center` with radius `radius`.
@@ -408,23 +430,6 @@ pub trait GraphTileProvider {
             buffer: VecDeque::new(),
         }
     }
-}
-
-pub trait OwnedGraphTileProvider<T: GraphTile>: GraphTileProvider {
-    /// Gets a tile containing the given graph ID.
-    ///
-    /// The result is an owned handle to a graph tile,
-    /// which implements the [`GraphTile`](GraphTile) trait.
-    ///
-    /// # Errors
-    ///
-    /// This operation may fail for several reasons,
-    /// including the tile not existing, I/O errors, and more.
-    /// Refer to [`GraphTileProviderError`] for details.
-    fn get_handle_for_tile_containing(
-        &self,
-        graph_id: GraphId,
-    ) -> Result<T, GraphTileProviderError>;
 }
 
 /// A keyed lock.

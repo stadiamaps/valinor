@@ -1,12 +1,11 @@
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
+use crate::graph_tile::handles::MmapGraphTileHandle;
 use crate::graph_tile::{GraphTileBuildError, GraphTileBuilder};
 use crate::graph_tile::{GraphTileView, handles::OwnedGraphTileHandle};
 use crate::spatial::bbox_with_center;
 use crate::tile_hierarchy::STANDARD_LEVELS;
-use crate::tile_provider::{
-    GraphTileProvider, GraphTileProviderError, LockTable, OwnedGraphTileProvider,
-};
+use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, LockTable};
 use geo::{CoordFloat, Point};
 use lru::LruCache;
 use num_traits::FromPrimitive;
@@ -131,6 +130,8 @@ impl DirectoryGraphTileProvider {
 }
 
 impl GraphTileProvider for DirectoryGraphTileProvider {
+    type TileHandle = Arc<OwnedGraphTileHandle>;
+
     #[inline]
     fn with_tile_containing<F, T>(
         &self,
@@ -144,28 +145,6 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
         Ok(process(tile.borrow_dependent()))
     }
 
-    fn enumerate_tiles_within_radius<N: CoordFloat + FromPrimitive>(
-        &self,
-        center: Point<N>,
-        radius: N,
-    ) -> Vec<GraphId> {
-        let mut out: Vec<GraphId> = Vec::new();
-
-        let (north, east, south, west) = bbox_with_center(center, radius);
-
-        for level in STANDARD_LEVELS.iter() {
-            for gid in level.tiles_intersecting_bbox(north, east, south, west) {
-                if self.get_handle_for_tile_containing(gid).is_ok() {
-                    out.push(gid);
-                }
-            }
-        }
-
-        out
-    }
-}
-
-impl OwnedGraphTileProvider<Arc<OwnedGraphTileHandle>> for DirectoryGraphTileProvider {
     fn get_handle_for_tile_containing(
         &self,
         graph_id: GraphId,
@@ -197,6 +176,26 @@ impl OwnedGraphTileProvider<Arc<OwnedGraphTileHandle>> for DirectoryGraphTilePro
         // Construct a graph tile with the bytes
         Ok(tile)
     }
+
+    fn enumerate_tiles_within_radius<N: CoordFloat + FromPrimitive>(
+        &self,
+        center: Point<N>,
+        radius: N,
+    ) -> Vec<GraphId> {
+        let mut out: Vec<GraphId> = Vec::new();
+
+        let (north, east, south, west) = bbox_with_center(center, radius);
+
+        for level in STANDARD_LEVELS.iter() {
+            for gid in level.tiles_intersecting_bbox(north, east, south, west) {
+                if self.get_handle_for_tile_containing(gid).is_ok() {
+                    out.push(gid);
+                }
+            }
+        }
+
+        out
+    }
 }
 
 #[cfg(test)]
@@ -205,7 +204,7 @@ mod test {
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
     use crate::tile_hierarchy::STANDARD_LEVELS;
-    use crate::tile_provider::{GraphTileProvider, OwnedGraphTileProvider};
+    use crate::tile_provider::GraphTileProvider;
     use core::num::NonZeroUsize;
     use rand::{
         distr::{Distribution, Uniform},
