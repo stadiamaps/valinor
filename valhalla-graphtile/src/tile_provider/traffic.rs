@@ -1,5 +1,8 @@
 use crate::GraphId;
-use crate::graph_tile::{LookupError, MmapTilePointer, TileOffset};
+use crate::graph_tile::{
+    LookupError,
+    handles::{MmapTilePointer, TileOffset},
+};
 use crate::tile_provider::{GraphTileProviderError, TarballTileProvider};
 use crate::traffic_tile::{TRAFFIC_TILE_VERSION, TrafficSpeed, TrafficTileHeader};
 use std::path::Path;

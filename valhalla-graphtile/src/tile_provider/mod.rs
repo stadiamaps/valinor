@@ -20,7 +20,7 @@ mod traffic;
 use crate::graph_id::InvalidGraphIdError;
 use crate::graph_tile::{
     GraphNode, GraphTile, GraphTileDecodingError, GraphTileView, LookupError, NodeInfo,
-    OpposingEdgeIndex, OwnedGraphTileHandle,
+    OpposingEdgeIndex,
 };
 pub use directory::DirectoryGraphTileProvider;
 pub use tarball::TarballTileProvider;
@@ -410,7 +410,7 @@ pub trait GraphTileProvider {
     }
 }
 
-pub trait OwnedGraphTileProvider: GraphTileProvider {
+pub trait OwnedGraphTileProvider<T: GraphTile>: GraphTileProvider {
     /// Gets a tile containing the given graph ID.
     ///
     /// The result is an owned handle to a graph tile,
@@ -424,7 +424,7 @@ pub trait OwnedGraphTileProvider: GraphTileProvider {
     fn get_handle_for_tile_containing(
         &self,
         graph_id: GraphId,
-    ) -> Result<Arc<OwnedGraphTileHandle>, GraphTileProviderError>;
+    ) -> Result<T, GraphTileProviderError>;
 }
 
 /// A keyed lock.

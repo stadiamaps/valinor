@@ -1,6 +1,6 @@
 # valhalla-graphtile
 
-This crate exposes a safe interface for reading and writing Valhalla graph tiles.
+This crate exposes (mostly!) safe interfaces for reading and writing Valhalla graph tiles.
 
 ## Goals
 
@@ -36,7 +36,7 @@ let mut results = provider
         25.0,
         // Processing closure to extract the parts we care about
         // (NB: The graph_node is a borrowed reference, so you need to copy out fields you want to save)
-        |graph_node, distance | (graph_node.node_id, distance),
+        |graph_node, distance| (graph_node.node_id, distance),
     )
     .collect::<Result<Vec<(GraphId, f64)>, _>>().expect("Something went wrong fetching tiles");
 

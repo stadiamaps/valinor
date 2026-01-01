@@ -1,7 +1,7 @@
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
 use crate::graph_tile::{GraphTileBuildError, GraphTileBuilder};
-use crate::graph_tile::{GraphTileView, OwnedGraphTileHandle};
+use crate::graph_tile::{GraphTileView, handles::OwnedGraphTileHandle};
 use crate::spatial::bbox_with_center;
 use crate::tile_hierarchy::STANDARD_LEVELS;
 use crate::tile_provider::{
@@ -165,7 +165,7 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
     }
 }
 
-impl OwnedGraphTileProvider for DirectoryGraphTileProvider {
+impl OwnedGraphTileProvider<Arc<OwnedGraphTileHandle>> for DirectoryGraphTileProvider {
     fn get_handle_for_tile_containing(
         &self,
         graph_id: GraphId,

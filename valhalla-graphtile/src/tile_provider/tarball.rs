@@ -1,6 +1,10 @@
-use super::{GraphTileProvider, GraphTileProviderError};
+use super::{GraphTileProvider, GraphTileProviderError, OwnedGraphTileProvider};
 use crate::GraphId;
-use crate::graph_tile::{GraphTileView, MmapTilePointer, TileOffset};
+use crate::graph_tile::handles::MmapGraphTileHandle;
+use crate::graph_tile::{
+    GraphTileView,
+    handles::{MmapTilePointer, TileOffset},
+};
 use crate::spatial::bbox_with_center;
 use crate::tile_hierarchy::STANDARD_LEVELS;
 use geo::{CoordFloat, Point};
@@ -149,6 +153,9 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
         F: FnOnce(&GraphTileView) -> T,
     {
         let tile_pointer = self.get_pointer_for_tile_containing(graph_id)?;
+        // SAFETY: We assume that the tile pointer is live and points to an actual graph tile location in the tarball.
+        // That is to say, we assume the tile is well-formed (correct index) and that the underlying memory map
+        // has not changed in a way that would render the tile invalid.
         let tile_bytes = unsafe { tile_pointer.as_tile_bytes() };
         let tile = GraphTileView::try_from(tile_bytes)?;
         Ok(process(&tile))
@@ -241,6 +248,20 @@ impl TarballTileProvider<true> {
     /// This may fail due to any of the usual reasons I/O operations fail.
     pub fn flush(&self) -> std::io::Result<()> {
         self.mmap.flush()
+    }
+}
+
+impl<const MUT: bool> OwnedGraphTileProvider<MmapGraphTileHandle> for TarballTileProvider<MUT> {
+    fn get_handle_for_tile_containing(
+        &self,
+        graph_id: GraphId,
+    ) -> Result<MmapGraphTileHandle, GraphTileProviderError> {
+        let pointer = self.get_pointer_for_tile_containing(graph_id)?;
+
+        // SAFETY: Assumes that the pointer is to a valid graph tile.
+        // Since we just got this from get_pointer_for_tile_containing, this should be safe enough.
+        // The backing memory is assumed to never be mutated during the lifetime of the returned handle.
+        Ok(unsafe { MmapGraphTileHandle::try_from(pointer)? })
     }
 }
 
