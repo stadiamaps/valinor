@@ -443,6 +443,11 @@ pub struct GraphNode<'a> {
 /// A view over a single tile in the Valhalla hierarchical tile graph.
 ///
 /// Access should normally go through the [`GraphTile`] trait.
+///
+/// # Cloning
+///
+/// Cloning this struct is cheap, since the internal types are all references.
+#[derive(Clone)]
 pub struct GraphTileView<'a> {
     /// Header with various metadata about the tile and internal sizes.
     header: &'a GraphTileHeader,

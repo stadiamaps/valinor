@@ -28,22 +28,20 @@ let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap());
 
 // nodes_within_radius is a high-level helper function that gets nodes near a certain point
+// The result of nodes_within_radius is an un-sorted iterator that lets you get results quickly with ~zero overhead.
 let mut results = provider
     .nodes_within_radius(
         // Our point query
         Point::new(1.515459, 42.544805),
         // Radius in meters
         25.0,
-        // Processing closure to extract the parts we care about
-        // (NB: The graph_node is a borrowed reference, so you need to copy out fields you want to save)
-        |graph_node, distance| (graph_node.node_id, distance),
     )
-    .collect::<Result<Vec<(GraphId, f64)>, _>>().expect("Something went wrong fetching tiles");
+    .map(|result| result.map(|node_ref| (node_ref.node_id(), node_ref.approx_distance())))
+    .collect::<Result<Vec<(GraphId, f64)>, _>>()
+    .expect("Something went wrong fetching tiles");
 
-// The result of nodes_within_radius is an un-sorted iterator that lets you get results quickly with ~zero overhead
-// due to inlining and an operator closure.
-// We collect the results here and sort them.
-results.sort_unstable_by(|a, b| a.1.total_cmp( &b.1));
+// Sort by distance
+results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
 ```
 
 ## Testing

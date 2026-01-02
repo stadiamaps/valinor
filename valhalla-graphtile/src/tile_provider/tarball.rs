@@ -143,7 +143,7 @@ impl<const MUT: bool> TarballTileProvider<MUT> {
 }
 
 impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
-    type TileHandle = MmapGraphTileHandle;
+    type TileHandle = Arc<MmapGraphTileHandle>;
 
     #[inline]
     fn with_tile_containing<F, T>(
@@ -173,7 +173,7 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
         // SAFETY: Assumes that the pointer is to a valid graph tile.
         // Since we just got this from get_pointer_for_tile_containing, this should be safe enough.
         // The backing memory is assumed to never be mutated during the lifetime of the returned handle.
-        Ok(unsafe { MmapGraphTileHandle::try_from(pointer)? })
+        Ok(Arc::new(unsafe { MmapGraphTileHandle::try_from(pointer)? }))
     }
 
     fn enumerate_tiles_within_radius<N: CoordFloat + FromPrimitive>(

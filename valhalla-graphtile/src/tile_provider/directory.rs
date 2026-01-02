@@ -1,6 +1,5 @@
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
-use crate::graph_tile::handles::MmapGraphTileHandle;
 use crate::graph_tile::{GraphTileBuildError, GraphTileBuilder};
 use crate::graph_tile::{GraphTileView, handles::OwnedGraphTileHandle};
 use crate::spatial::bbox_with_center;

@@ -19,8 +19,7 @@ mod traffic;
 
 use crate::graph_id::InvalidGraphIdError;
 use crate::graph_tile::{
-    GraphNode, GraphTile, GraphTileDecodingError, GraphTileView, LookupError, NodeInfo,
-    OpposingEdgeIndex,
+    GraphTile, GraphTileDecodingError, GraphTileView, LookupError, NodeInfo, OpposingEdgeIndex,
 };
 pub use directory::DirectoryGraphTileProvider;
 pub use tarball::TarballTileProvider;
@@ -48,8 +47,17 @@ pub enum GraphTileProviderError {
     UnsupportedTileVersion,
 }
 
+/// A generic trait for all graph tile providers.
+///
+/// This provides a standard interface so users don't need to care about the details
+/// (e.g., if a tile is loaded from a file on disk, from a memory map, etc.).
+/// Additionally, we get to define some pieces of shared logic that are provider-independent directly in the trait.
+/// Monomorphization of generics ensures this is performant (unless you go out of your way to erase types).
 pub trait GraphTileProvider {
-    type TileHandle: GraphTile;
+    /// The tile handle type for owned handles.
+    ///
+    /// Code using the `GraphTileProvider` may rely on the handles being cheaply cloneable.
+    type TileHandle: GraphTile + Clone;
 
     /// Gets the tile containing the given graph ID,
     /// and does some work in a closure which takes the reference as a parameter.
@@ -409,24 +417,21 @@ pub trait GraphTileProvider {
     ///
     /// Also panics if you provide non-finite floating point values (e.g., NaN or infinity).
     #[inline]
-    fn nodes_within_radius<N: CoordFloat + FromPrimitive, F, T>(
+    fn nodes_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
         radius_in_meters: N,
-        op: F,
-    ) -> impl Iterator<Item = Result<T, GraphTileProviderError>>
+    ) -> impl Iterator<Item = Result<GraphNodeRef<N, Self::TileHandle>, GraphTileProviderError>>
     where
-        F: FnMut(GraphNode<'_>, N) -> T,
         Self: Sized,
     {
+        let tiles = self.enumerate_tiles_within_radius(center, radius_in_meters);
+
         NodesWithinRadius {
             provider: self,
             center,
             radius_in_meters,
-            op,
-            tiles: self
-                .enumerate_tiles_within_radius(center, radius_in_meters)
-                .into_iter(),
+            tile_ids: tiles,
             buffer: VecDeque::new(),
         }
     }
@@ -450,52 +455,93 @@ impl<K: std::hash::Hash + Eq + Clone> LockTable<K> {
     }
 }
 
+pub struct GraphNodeRef<N: CoordFloat + FromPrimitive, H: GraphTile> {
+    handle: H,
+    node_id: GraphId,
+    approx_distance: N,
+}
+
+impl<N: CoordFloat + FromPrimitive, H: GraphTile> GraphNodeRef<N, H> {
+    /// The full graph ID of the node.
+    #[inline]
+    pub fn node_id(&self) -> GraphId {
+        self.node_id
+    }
+
+    /// Retrieves the node info for the graph node.
+    ///
+    /// # Performance
+    ///
+    /// This is a cheap operation, since this struct keeps an internal handle to the tile.
+    #[inline]
+    pub fn node_info(&self) -> &NodeInfo {
+        // NB: This is not publicly constructible; we guarantee that the node is valid for the tile
+        // when creating this struct internally, so the direct slice access is infallible.
+        &self.handle.nodes()[self.node_id.feature_index() as usize]
+    }
+
+    /// The approximate distance to the node from the query point.
+    ///
+    /// The distance is calculated using the squares approximator ([`crate::spatial::DistanceApproximator`]),
+    /// which is not quite as accurate as Haversine distance, but is significantly faster and has
+    /// acceptable error over short distances.
+    #[inline]
+    pub fn approx_distance(&self) -> N {
+        self.approx_distance
+    }
+}
+
 /// An iterator over nodes within a given radius.
 ///
 /// Used internally and returned as an opaque `impl Iterator`.
-struct NodesWithinRadius<'prov, P, N, F, T, I>
+struct NodesWithinRadius<'prov, P, N>
 where
     P: GraphTileProvider,
     N: CoordFloat + FromPrimitive,
-    F: for<'t> FnMut(GraphNode<'t>, N) -> T,
-    I: Iterator<Item = GraphId>,
 {
     provider: &'prov P,
     center: Point<N>,
     radius_in_meters: N,
-    op: F,
-    tiles: I,
-    buffer: VecDeque<T>,
+    tile_ids: Vec<GraphId>,
+    buffer: VecDeque<GraphNodeRef<N, P::TileHandle>>,
 }
 
-impl<'prov, P, N, F, T, I> Iterator for NodesWithinRadius<'prov, P, N, F, T, I>
+impl<'prov, P, N> Iterator for NodesWithinRadius<'prov, P, N>
 where
     P: GraphTileProvider,
     N: CoordFloat + FromPrimitive,
-    F: for<'t> FnMut(GraphNode<'t>, N) -> T,
-    I: Iterator<Item = GraphId>,
 {
-    type Item = Result<T, GraphTileProviderError>;
+    type Item = Result<GraphNodeRef<N, P::TileHandle>, GraphTileProviderError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Try to get an item from the buffer
-        if let Some(next) = self.buffer.pop_front() {
-            return Some(Ok(next));
+        if let Some(node_ref) = self.buffer.pop_front() {
+            return Some(Ok(node_ref));
         }
 
-        // Fill the buffer if needed
-        let base_id = self.tiles.next()?;
-        if let Err(err) = self.provider.with_tile_containing(base_id, |tile| {
-            self.buffer.extend(
-                tile.nodes_within_radius(self.center, self.radius_in_meters)
-                    .map(|(gn, approx_dist)| (self.op)(gn, approx_dist)),
-            );
-        }) {
-            return Some(Err(err));
-        }
+        let base_id = match self.tile_ids.pop() {
+            Some(base_id) => base_id,
+            None => return None,
+        };
 
-        // After filling from the tile, either return the first item or keep iterating
-        self.buffer.pop_front().map(Ok).or_else(|| self.next())
+        let tile_handle = match self.provider.get_handle_for_tile_containing(base_id) {
+            Ok(tile_handle) => tile_handle,
+            Err(err) => {
+                return Some(Err(err));
+            }
+        };
+
+        // Stream items from the current tile, storing everything but the node info reference,
+        // since we can reconstruct it later.
+        // The tile handle clones are cheap (this is a documented assumption in the trait).
+        let iter = tile_handle.nodes_within_radius(self.center, self.radius_in_meters);
+        self.buffer
+            .extend(iter.map(|(graph_node, distance)| GraphNodeRef {
+                handle: tile_handle.clone(),
+                node_id: graph_node.node_id,
+                approx_distance: distance,
+            }));
+
+        self.next()
     }
 }
 
@@ -534,21 +580,17 @@ mod tests {
             for (idx, node) in tile_view.nodes().into_iter().enumerate() {
                 assert!(
                     provider
-                        .nodes_within_radius(
-                            node.coordinate(sw).into(),
-                            25.0,
-                            |graph_node, distance| { (graph_node.node_id, distance) }
-                        )
+                        .nodes_within_radius(node.coordinate(sw).into(), 25.0,)
                         .any(|res| {
                             match res {
-                                Ok((node_id, distance)) => {
-                                    node_id
+                                Ok(node_ref) => {
+                                    node_ref.node_id()
                                         == tile_view
                                             .header()
                                             .graph_id()
                                             .with_feature_index(idx as u64)
                                             .unwrap()
-                                        && distance == 0.0
+                                        && node_ref.approx_distance() == 0.0
                                 }
                                 Err(e) => {
                                     panic!("Error searching for nodes: {:?}", e);
