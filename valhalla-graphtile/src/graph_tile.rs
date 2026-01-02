@@ -981,6 +981,7 @@ mod tests {
         TEST_GRAPH_TILE_WITH_FLOW,
     };
     use enumset::{EnumSet, enum_set};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_get_opp_edge_index() {
@@ -1362,11 +1363,23 @@ mod tests {
 
     #[test]
     fn test_get_nodes_within_radius() {
+        let mut rng = rng();
         let tile = &*TEST_GRAPH_TILE_WITH_FLOW;
         let tile_view = tile.borrow_dependent();
         let sw = tile_view.header().sw_corner();
 
-        for (idx, node) in tile_view.nodes().into_iter().enumerate() {
+        for (idx, node) in tile_view
+            .nodes()
+            .into_iter()
+            .enumerate()
+            .filter(|(idx, _)| {
+                if cfg!(miri) {
+                    rng.random_bool(0.1)
+                } else {
+                    true
+                }
+            })
+        {
             assert!(
                 tile_view
                     .nodes_within_radius(node.coordinate(sw).into(), 25.0)

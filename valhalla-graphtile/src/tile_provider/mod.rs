@@ -551,6 +551,7 @@ mod tests {
     use crate::graph_tile::GraphTile;
     use crate::tile_provider::{DirectoryGraphTileProvider, GraphTileProvider};
     use geo::{Destination, Haversine, point};
+    use rand::{Rng, rng};
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
 
@@ -569,6 +570,8 @@ mod tests {
 
     #[test]
     fn test_nodes_within_radius() {
+        let mut rng = rng();
+
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles");
@@ -577,7 +580,18 @@ mod tests {
         provider.with_tile_containing_or_panic(graph_id, |tile_view| {
             let sw = tile_view.header().sw_corner();
 
-            for (idx, node) in tile_view.nodes().into_iter().enumerate() {
+            for (idx, node) in tile_view
+                .nodes()
+                .into_iter()
+                .enumerate()
+                .filter(|(idx, _)| {
+                    if cfg!(miri) {
+                        rng.random_bool(0.1)
+                    } else {
+                        true
+                    }
+                })
+            {
                 assert!(
                     provider
                         .nodes_within_radius(node.coordinate(sw).into(), 25.0,)
