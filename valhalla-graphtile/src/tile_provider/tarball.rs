@@ -176,7 +176,7 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
         Ok(Arc::new(unsafe { MmapGraphTileHandle::try_from(pointer)? }))
     }
 
-    fn enumerate_tiles_within_radius<N: CoordFloat + FromPrimitive>(
+    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
         radius: N,

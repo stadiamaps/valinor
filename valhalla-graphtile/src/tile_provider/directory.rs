@@ -176,7 +176,7 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
         Ok(tile)
     }
 
-    fn enumerate_tiles_within_radius<N: CoordFloat + FromPrimitive>(
+    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
         radius: N,

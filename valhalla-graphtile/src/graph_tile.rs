@@ -1368,18 +1368,13 @@ mod tests {
         let tile_view = tile.borrow_dependent();
         let sw = tile_view.header().sw_corner();
 
-        for (idx, node) in tile_view
-            .nodes()
-            .into_iter()
-            .enumerate()
-            .filter(|(idx, _)| {
-                if cfg!(miri) {
-                    rng.random_bool(0.1)
-                } else {
-                    true
-                }
-            })
-        {
+        for (idx, node) in tile_view.nodes().into_iter().enumerate().filter(|_| {
+            if cfg!(miri) {
+                rng.random_bool(0.1)
+            } else {
+                true
+            }
+        }) {
             assert!(
                 tile_view
                     .nodes_within_radius(node.coordinate(sw).into(), 25.0)

@@ -36,7 +36,7 @@ let mut results = provider
         // Radius in meters
         25.0,
     )
-    .map(|result| result.map(|node_ref| (node_ref.node_id(), node_ref.approx_distance())))
+    .map(|result| result.map(|node_ref| (node_ref.graph_id(), node_ref.approx_distance())))
     .collect::<Result<Vec<(GraphId, f64)>, _>>()
     .expect("Something went wrong fetching tiles");
 

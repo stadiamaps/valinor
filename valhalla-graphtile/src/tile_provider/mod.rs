@@ -8,12 +8,12 @@ use crate::GraphId;
 use dashmap::DashMap;
 use geo::{CoordFloat, Point};
 use num_traits::FromPrimitive;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use thiserror::Error;
 
 mod directory;
+mod iterators;
 mod tarball;
 mod traffic;
 
@@ -22,6 +22,8 @@ use crate::graph_tile::{
     GraphTile, GraphTileDecodingError, GraphTileView, LookupError, NodeInfo, OpposingEdgeIndex,
 };
 pub use directory::DirectoryGraphTileProvider;
+pub use iterators::GraphSearchResult;
+use iterators::NodesWithinRadius;
 pub use tarball::TarballTileProvider;
 pub use traffic::TrafficTileProvider;
 
@@ -110,7 +112,7 @@ pub trait GraphTileProvider {
     /// # Implementation note
     ///
     /// All returned tiles MUST be accessible by the provider (callers are allowed to assume this).
-    fn enumerate_tiles_within_radius<N: CoordFloat + FromPrimitive>(
+    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
         radius: N,
@@ -421,19 +423,15 @@ pub trait GraphTileProvider {
         &self,
         center: Point<N>,
         radius_in_meters: N,
-    ) -> impl Iterator<Item = Result<GraphNodeRef<N, Self::TileHandle>, GraphTileProviderError>>
+    ) -> impl Iterator<
+        Item = Result<GraphSearchResult<NodeInfo, N, Self::TileHandle>, GraphTileProviderError>,
+    >
     where
         Self: Sized,
     {
-        let tiles = self.enumerate_tiles_within_radius(center, radius_in_meters);
+        let tiles = self.tiles_within_radius(center, radius_in_meters);
 
-        NodesWithinRadius {
-            provider: self,
-            center,
-            radius_in_meters,
-            tile_ids: tiles,
-            buffer: VecDeque::new(),
-        }
+        NodesWithinRadius::new(self, center, radius_in_meters, tiles)
     }
 }
 
@@ -452,96 +450,6 @@ impl<K: std::hash::Hash + Eq + Clone> LockTable<K> {
             .entry(k)
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
-    }
-}
-
-pub struct GraphNodeRef<N: CoordFloat + FromPrimitive, H: GraphTile> {
-    handle: H,
-    node_id: GraphId,
-    approx_distance: N,
-}
-
-impl<N: CoordFloat + FromPrimitive, H: GraphTile> GraphNodeRef<N, H> {
-    /// The full graph ID of the node.
-    #[inline]
-    pub fn node_id(&self) -> GraphId {
-        self.node_id
-    }
-
-    /// Retrieves the node info for the graph node.
-    ///
-    /// # Performance
-    ///
-    /// This is a cheap operation, since this struct keeps an internal handle to the tile.
-    #[inline]
-    pub fn node_info(&self) -> &NodeInfo {
-        // NB: This is not publicly constructible; we guarantee that the node is valid for the tile
-        // when creating this struct internally, so the direct slice access is infallible.
-        &self.handle.nodes()[self.node_id.feature_index() as usize]
-    }
-
-    /// The approximate distance to the node from the query point.
-    ///
-    /// The distance is calculated using the squares approximator ([`crate::spatial::DistanceApproximator`]),
-    /// which is not quite as accurate as Haversine distance, but is significantly faster and has
-    /// acceptable error over short distances.
-    #[inline]
-    pub fn approx_distance(&self) -> N {
-        self.approx_distance
-    }
-}
-
-/// An iterator over nodes within a given radius.
-///
-/// Used internally and returned as an opaque `impl Iterator`.
-struct NodesWithinRadius<'prov, P, N>
-where
-    P: GraphTileProvider,
-    N: CoordFloat + FromPrimitive,
-{
-    provider: &'prov P,
-    center: Point<N>,
-    radius_in_meters: N,
-    tile_ids: Vec<GraphId>,
-    buffer: VecDeque<GraphNodeRef<N, P::TileHandle>>,
-}
-
-impl<'prov, P, N> Iterator for NodesWithinRadius<'prov, P, N>
-where
-    P: GraphTileProvider,
-    N: CoordFloat + FromPrimitive,
-{
-    type Item = Result<GraphNodeRef<N, P::TileHandle>, GraphTileProviderError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(node_ref) = self.buffer.pop_front() {
-            return Some(Ok(node_ref));
-        }
-
-        let base_id = match self.tile_ids.pop() {
-            Some(base_id) => base_id,
-            None => return None,
-        };
-
-        let tile_handle = match self.provider.get_handle_for_tile_containing(base_id) {
-            Ok(tile_handle) => tile_handle,
-            Err(err) => {
-                return Some(Err(err));
-            }
-        };
-
-        // Stream items from the current tile, storing everything but the node info reference,
-        // since we can reconstruct it later.
-        // The tile handle clones are cheap (this is a documented assumption in the trait).
-        let iter = tile_handle.nodes_within_radius(self.center, self.radius_in_meters);
-        self.buffer
-            .extend(iter.map(|(graph_node, distance)| GraphNodeRef {
-                handle: tile_handle.clone(),
-                node_id: graph_node.node_id,
-                approx_distance: distance,
-            }));
-
-        self.next()
     }
 }
 
@@ -580,25 +488,20 @@ mod tests {
         provider.with_tile_containing_or_panic(graph_id, |tile_view| {
             let sw = tile_view.header().sw_corner();
 
-            for (idx, node) in tile_view
-                .nodes()
-                .into_iter()
-                .enumerate()
-                .filter(|(idx, _)| {
-                    if cfg!(miri) {
-                        rng.random_bool(0.1)
-                    } else {
-                        true
-                    }
-                })
-            {
+            for (idx, node) in tile_view.nodes().into_iter().enumerate().filter(|_| {
+                if cfg!(miri) {
+                    rng.random_bool(0.1)
+                } else {
+                    true
+                }
+            }) {
                 assert!(
                     provider
                         .nodes_within_radius(node.coordinate(sw).into(), 25.0,)
                         .any(|res| {
                             match res {
                                 Ok(node_ref) => {
-                                    node_ref.node_id()
+                                    node_ref.graph_id()
                                         == tile_view
                                             .header()
                                             .graph_id()
