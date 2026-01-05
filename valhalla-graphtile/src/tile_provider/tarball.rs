@@ -330,9 +330,9 @@ pub fn parse_index_bin(index_bytes: &[u8]) -> Result<&[TileIndexBinEntry], Graph
     let num_tiles = index_bytes.len() / INDEX_ENTRY_SIZE;
 
     let (index_entries, tail) =
-        <[TileIndexBinEntry]>::ref_from_prefix_with_elems(&index_bytes, num_tiles).map_err(
-            |e| GraphTileProviderError::InvalidTarball(format!("Malformed index.bin: {e:?}")),
-        )?;
+        <[TileIndexBinEntry]>::ref_from_prefix_with_elems(index_bytes, num_tiles).map_err(|e| {
+            GraphTileProviderError::InvalidTarball(format!("Malformed index.bin: {e:?}"))
+        })?;
 
     assert!(
         tail.is_empty(),

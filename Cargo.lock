@@ -2234,6 +2234,7 @@ dependencies = [
  "serde",
  "tar",
  "thiserror 2.0.17",
+ "tracing",
  "trig-const",
  "walkdir",
  "zerocopy",

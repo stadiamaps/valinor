@@ -25,6 +25,7 @@ lru = { workspace = true }
 memmap2 = { workspace = true }
 nutype = { workspace = true }
 num_enum = { workspace = true }
+tracing = { workspace = true }
 trig-const = "0.3.0"
 serde = { workspace = true, optional = true }
 zerocopy = { workspace = true }

@@ -31,6 +31,9 @@ let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap
 // The result of nodes_within_radius is an un-sorted iterator that lets you get results quickly with ~zero overhead.
 let mut results = provider
     .nodes_within_radius(
+        // A filter predicate (e.g. to filter for only nodes with specific properties)
+        // which is applied *before* distance checks. Here we pass all nodes.
+        |_| true,
         // Our point query
         Point::new(1.515459, 42.544805),
         // Radius in meters

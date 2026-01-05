@@ -167,7 +167,7 @@ pub trait GraphTile {
 
     /// Gets an index which can be used to retrieve the opposing edge for a given graph ID.
     ///
-    /// As long as the original graph_id can exist within the tile,
+    /// As long as the original `graph_id` can exist within the tile,
     /// this method will return an index, even if it exists in another tile.
     /// However, access to other tiles may be required to actually get the edge,
     /// or create an unambiguous [`GraphID`].
@@ -239,7 +239,14 @@ pub trait GraphTile {
     /// Returns the list of edge IDs contained in the specified bin.
     ///
     /// The bin contents are stored as a single concatenated array with prefix offsets
-    /// for each bin in the tile header. This method returns a slice view into that array.
+    /// for each bin in the tile header. This method returns a slice of that array.
+    ///
+    /// Valhalla's edge bins speed up for finding edges by dividing the level 2 tiles into
+    /// a grid and storing edges that cross through each bounding box.
+    /// This limits the search space, since it's relatively expensive to deserialize edge geometry.
+    ///
+    /// While the directed graph edges always come in pairs,
+    /// only one edge from the pair is included in the edge bins!
     ///
     /// # Panics
     ///
@@ -289,11 +296,12 @@ pub trait GraphTile {
     ///
     /// Also panics if you provide non-finite floating point values (e.g., NaN or infinity).
     #[inline]
-    fn nodes_within_radius<F: CoordFloat + FromPrimitive>(
+    fn nodes_within_radius<N: CoordFloat + FromPrimitive, F: Fn(&NodeInfo) -> bool>(
         &self,
-        center: Point<F>,
-        radius_in_meters: F,
-    ) -> impl Iterator<Item = (GraphNode<'_>, F)> {
+        filter_predicate: F,
+        center: Point<N>,
+        radius_in_meters: N,
+    ) -> impl Iterator<Item = (GraphNode<'_>, N)> {
         let header = self.header();
         let level = header.graph_id().level();
         let tile_id = header.graph_id().tile_id();
@@ -308,14 +316,18 @@ pub trait GraphTile {
         let radius_squared = radius_in_meters * radius_in_meters;
 
         self.nodes()
-            .into_iter()
+            .iter()
             .enumerate()
             .filter_map(move |(idx, node_info)| {
+                if !filter_predicate(node_info) {
+                    return None;
+                }
+
                 let node_id = GraphId::try_from_components(level, tile_id, idx as u64).ok()?;
                 let nc = node_info.coordinate(sw);
 
-                let nc_lon = F::from(nc.x).expect("Unable to convert floating point");
-                let nc_lat = F::from(nc.y).expect("Unable to convert floating point");
+                let nc_lon = N::from(nc.x).unwrap();
+                let nc_lat = N::from(nc.y).unwrap();
                 let sq_dist = approximator.distance_squared(coord! {x: nc_lon, y: nc_lat});
                 if sq_dist <= radius_squared {
                     Some((GraphNode { node_id, node_info }, sq_dist.sqrt()))
@@ -522,6 +534,7 @@ impl GraphTile for GraphTileView<'_> {
         &self.transitions[start..(start + count)]
     }
 
+    #[inline]
     fn get_directed_edge(&self, id: GraphId) -> Result<&DirectedEdge, LookupError> {
         if self.may_contain_id(id) {
             self.directed_edges
@@ -902,7 +915,6 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
     }
 }
 
-// TODO: Maybe this should be an enum instead?
 /// A pair which can be used to get an opposing edge from a graph tile provider.
 pub struct OpposingEdgeIndex {
     /// The ID of the end node.
@@ -1377,7 +1389,7 @@ mod tests {
         }) {
             assert!(
                 tile_view
-                    .nodes_within_radius(node.coordinate(sw).into(), 25.0)
+                    .nodes_within_radius(|_| true, node.coordinate(sw).into(), 25.0)
                     .any(|(result_node, distance)| {
                         result_node.node_id
                             == tile
@@ -1388,6 +1400,12 @@ mod tests {
                             && distance == 0.0
                     }),
                 "Expected to find a match for the node"
+            );
+            assert!(
+                tile_view
+                    .nodes_within_radius(|_| true, node.coordinate(sw).into(), 25.0)
+                    .all(|(_, distance)| { distance <= 25.0 }),
+                "Expected all nodes to be within the search radius"
             );
         }
     }

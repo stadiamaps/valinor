@@ -299,9 +299,9 @@ impl DirectedEdge {
             // Cannot be related to transit
             RoadUse::TransitConnection
             | RoadUse::PlatformConnection
-            | RoadUse::EgressConnection => false,
+            | RoadUse::EgressConnection
             // Cannot be under construction!
-            RoadUse::Construction => false,
+            |RoadUse::Construction => false,
             // That's all!
             _ => true,
         }
