@@ -550,7 +550,7 @@ mod tests {
 
             for (idx, node) in tile_view.nodes().into_iter().enumerate().filter(|_| {
                 if cfg!(miri) {
-                    rng.random_bool(0.1)
+                    rng.random_bool(0.01)
                 } else {
                     true
                 }
@@ -600,7 +600,7 @@ mod tests {
                 .directed_edges()
                 .iter()
                 .enumerate()
-                .filter(|(_, edge)| edge.length() > 0 && if cfg!(miri) { rng.random_bool(0.1) } else { true })
+                .filter(|(_, edge)| edge.length() > 0 && if cfg!(miri) { rng.random_bool(0.01) } else { true })
             {
                 // Skip edges with invalid or empty geometry; the search intentionally skips them too
                 let shape_coords: Vec<geo::Coord<f32>> = tile_view
