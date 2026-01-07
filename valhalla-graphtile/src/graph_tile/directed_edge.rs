@@ -500,6 +500,10 @@ impl DirectedEdge {
     }
 
     /// Gets the set of access modes allowed to traverse this edge forward.
+    ///
+    /// Note that "forward" is relative to the two nodes that the edge connects.
+    /// All edges in Valhalla are directed and come in pairs.
+    /// This is _not_ related to the OSM way direction.
     #[inline]
     pub fn forward_access(&self) -> EnumSet<Access> {
         // SAFETY: The access bits are length 12, so invalid representations are impossible.
@@ -507,6 +511,10 @@ impl DirectedEdge {
     }
 
     /// Gets the set of access modes allowed to traverse this edge in reverse.
+    ///
+    /// Note that "reverse" is relative to the two nodes that the edge connects.
+    /// All edges in Valhalla are directed and come in pairs.
+    /// This is _not_ related to the OSM way direction.
     #[inline]
     pub fn reverse_access(&self) -> EnumSet<Access> {
         // SAFETY: The access bits are length 12, so invalid representations are impossible.
