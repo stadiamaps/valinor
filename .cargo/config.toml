@@ -1,5 +1,6 @@
 [build]
 rustflags = ["--cfg", "zerocopy_derive_union_into_bytes"]
+rustdocflags = ["--cfg", "zerocopy_derive_union_into_bytes"]
 
 [target.s390x-unknown-linux-gnu]
 # Use the GNU cross-linker for s390x on Ubuntu runners
