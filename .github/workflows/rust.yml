@@ -28,6 +28,9 @@ jobs:
     - name: Run tests
       run: cargo nextest run --no-fail-fast
 
+    - name: Run doc tests (not currently supported by nextest https://github.com/nextest-rs/nextest/issues/16)
+      run: cargo test --doc
+
     - name: Install big-endian toolchain (s390x)
       if: matrix.os == 'ubuntu-latest'
       run: rustup target add s390x-unknown-linux-gnu
@@ -40,6 +43,10 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: cargo nextest run --no-fail-fast --target s390x-unknown-linux-gnu
 
+    - name: Run doc tests (big-endian s390x)
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo test --doc --target s390x-unknown-linux-gnu
+
     - name: Install Miri
       if: matrix.os == 'ubuntu-latest'
       run: rustup +nightly component add miri
@@ -49,7 +56,14 @@ jobs:
       run: cargo +nightly miri nextest run --no-fail-fast
       env:
         RUST_BACKTRACE: 1
-        MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-env-forward=RUST_BACKTRACE
+        MIRIFLAGS: -Zmiri-disable-isolation
+
+    - name: Run doc tests in Miri
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo +nightly miri test --doc
+      env:
+        RUST_BACKTRACE: 1
+        MIRIFLAGS: -Zmiri-disable-isolation
 
     - name: Install nightly big-endian toolchain (s390x)
       if: matrix.os == 'ubuntu-latest'
@@ -60,7 +74,14 @@ jobs:
       run: cargo +nightly miri nextest run --no-fail-fast --target s390x-unknown-linux-gnu
       env:
         RUST_BACKTRACE: 1
-        MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-env-forward=RUST_BACKTRACE
+        MIRIFLAGS: -Zmiri-disable-isolation
+
+    - name: Run doc tests in Miri (big-endian s390x)
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo +nightly miri test --doc --target s390x-unknown-linux-gnu
+      env:
+        RUST_BACKTRACE: 1
+        MIRIFLAGS: -Zmiri-disable-isolation
 
     - name: Build valhalla-graphtile in isolation (default feature flags)
       run: cargo build -p valhalla-graphtile
