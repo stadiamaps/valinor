@@ -16,7 +16,7 @@ use geo::{
 };
 use num_traits::FromPrimitive;
 use std::cell::LazyCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::marker::PhantomData;
 
@@ -113,8 +113,11 @@ impl<
         filter_predicate: F,
         center: Point<N>,
         radius_in_meters: N,
-        tile_ids: Vec<GraphId>,
+        mut tile_ids: Vec<GraphId>,
     ) -> Self {
+        // We can use the edge bins at L2 which also contain L0 and L1 edges; clever, right?
+        tile_ids.retain(|tile| tile.level() == 2);
+        
         Self {
             provider,
             filter_predicate,
@@ -227,14 +230,47 @@ where
     F: Fn(&DirectedEdge) -> bool,
 {
     let approximator = DistanceApproximator::new(query_point.into());
-    let edge_ids = prefilter_edge_ids(&tile, query_point, radius);
+    // Build up the set of edge IDs.
+    // Our decision for the moment is to make the API easy to use, which means we make a break
+    // from how Loki does things, only returning one edge or the other based on a filter.
+    // To make our iterator easy to use, we're rolling with all (sortof) edges.
+    //
+    // The "sortof" qualifier is because edge bins don't include inbound edges for tweeners,
+    // which is great, since this isn't what we're searching for anyway.
+    // This will give us a set of all edge IDs that are possibly relevant in both directions.
+    // This enables the caller to filter based on what they will actually use
+    // in terms of forward edges, and removes some of the 4D mental chess burden.
+    let initial_edge_ids = prefilter_edge_ids(&tile, query_point, radius);
+    // TODO: This section still needs some optimization and cleanup.
+    let mut edge_ids = Vec::with_capacity(initial_edge_ids.len() * 2);
+    let mut tile_cache = HashMap::from([(tile.graph_id(), tile.clone())]);
+    for edge_id in initial_edge_ids {
+        let opp_edge_index = if tile.may_contain_id(edge_id) {
+            // Fast path: the edge is in the current tile
+            tile.get_opp_edge_index(edge_id)?
+        } else {
+            // Slow path: the edge is in another tile; get or insert it into the cache
+            let tile = tile_cache.entry(edge_id.tile_base_id()).or_insert_with(|| {
+                provider.get_handle_for_tile_containing(edge_id).expect("Unable to get tile")
+            });
+            tile.get_opp_edge_index(edge_id)?
+        };
+
+        let opp_tile = tile_cache.entry(opp_edge_index.end_node_id.tile_base_id()).or_insert_with(|| {
+            provider.get_handle_for_tile_containing(opp_edge_index.end_node_id).expect("Unable to get tile")
+        });
+        let opp_edge_id = provider.graph_id_for_opposing_edge_index(opp_edge_index, opp_tile)?;
+        edge_ids.push(edge_id);
+        edge_ids.push(opp_edge_id);
+    }
+    // Slight optimization to ensure we hit tiles in a more cache-friendly order.
+    edge_ids.sort();
     let mut results = Vec::with_capacity(edge_ids.len());
 
     // Loop through the pre-filtered edges (only a subset of levels with binning; otherwise all edges)
     for edge_id in edge_ids {
         // NOTE: This code IS a bit weird, but it's also like twice as fast as several attempts
         // which broke it out into smaller functions.
-        // FIXME: We still need to handle getting opposing edges in some cases.
         if tile.may_contain_id(edge_id) {
             // Fast path
             let edge = tile.get_directed_edge(edge_id)?;

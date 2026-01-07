@@ -483,12 +483,11 @@ pub trait GraphTileProvider {
     where
         Self: Sized,
     {
-        // FIXME: We are probably doing a lot of extra work by scanning level 0 and 1...
-        // We might be able to use the edge bins at L2 which also contain L0 and L1 edges!
-        // TBD if we should sort these for efficient access.
         let tiles = self.tiles_within_radius(center, radius_in_meters);
 
-        // TODO: Decide if we want to return LITERALLY every edge (optionally) or whether we only need one of the pair!
+        // TODO: Decide if we want to return LITERALLY every edge or whether we should allow also getting just one of a pair.
+        // Fetching opposing edges (current behavior) adds some overhead,
+        // but the results are easier to understand.
         ResultsWithinRadius::edges(self, filter_predicate, center, radius_in_meters, tiles)
     }
 }
@@ -635,22 +634,17 @@ mod tests {
                     .with_feature_index(idx as u64)
                     .unwrap();
 
-                // Edge binning only stores one edge of the pair, and we could get either.
-                let opp_edge_id = provider.get_opposing_edge_id(graph_id, tile_view).expect("Unable to get opposing edge");
-
                 // Expect to find this exact edge at near-zero distance (allow tiny numeric error)
                 assert!(
                     provider
                         .edges_within_radius(|_| true, query_point, 25.0)
                         .any(|res| match res {
                             Ok(edge_ref) => {
-                                edge_ref.approx_distance() <= 1.0
-                                && (edge_ref.graph_id() == graph_id || edge_ref.graph_id() == opp_edge_id)
+                                edge_ref.approx_distance() <= 1.0 && edge_ref.graph_id() == graph_id
                             }
                             Err(e) => panic!("Error searching for edges: {:?}", e),
                         }),
-                    "Expected to find a match for the edge idx {graph_id}. edge = {edge:?} linestring = {ls:?} query_point = {query_point:?} sw = {sw:?} opp = {}",
-                    opp_edge_id
+                    "Expected to find a match for the edge idx {graph_id}. edge = {edge:?} linestring = {ls:?} query_point = {query_point:?} sw = {sw:?}",
                 );
 
                 // All reported edges should be within the requested radius
