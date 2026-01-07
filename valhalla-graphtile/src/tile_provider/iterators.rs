@@ -16,7 +16,7 @@ use geo::{
 };
 use num_traits::FromPrimitive;
 use std::cell::LazyCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::marker::PhantomData;
 
@@ -117,7 +117,7 @@ impl<
     ) -> Self {
         // We can use the edge bins at L2 which also contain L0 and L1 edges; clever, right?
         tile_ids.retain(|tile| tile.level() == 2);
-        
+
         Self {
             provider,
             filter_predicate,
@@ -211,10 +211,7 @@ impl<
     }
 }
 
-/// A helper function that searches edges at the tile level.
-///
-/// This is implemented as a private helper rather than directly on `GraphTile`,
-/// since it is not useful in general, but only as part of the above search iterator.
+/// A helper function that finds edges using L2 edge bins as a spatial filter.
 fn edges_within_radius<
     P: GraphTileProvider,
     F,
@@ -229,7 +226,14 @@ fn edges_within_radius<
 where
     F: Fn(&DirectedEdge) -> bool,
 {
+    debug_assert!(
+        tile.graph_id().level() == 2,
+        "edges_within_radius must be called with a level 2 tile so we can use edge bins as a filter"
+    );
+
     let approximator = DistanceApproximator::new(query_point.into());
+    let tile_graph_id = tile.graph_id();
+
     // Build up the set of edge IDs.
     // Our decision for the moment is to make the API easy to use, which means we make a break
     // from how Loki does things, only returning one edge or the other based on a filter.
@@ -241,33 +245,82 @@ where
     // This enables the caller to filter based on what they will actually use
     // in terms of forward edges, and removes some of the 4D mental chess burden.
     let initial_edge_ids = prefilter_edge_ids(&tile, query_point, radius);
-    // TODO: This section still needs some optimization and cleanup.
-    let mut edge_ids = Vec::with_capacity(initial_edge_ids.len() * 2);
-    let mut tile_cache = HashMap::from([(tile.graph_id(), tile.clone())]);
-    for edge_id in initial_edge_ids {
-        let opp_edge_index = if tile.may_contain_id(edge_id) {
-            // Fast path: the edge is in the current tile
-            tile.get_opp_edge_index(edge_id)?
-        } else {
-            // Slow path: the edge is in another tile; get or insert it into the cache
-            let tile = tile_cache.entry(edge_id.tile_base_id()).or_insert_with(|| {
-                provider.get_handle_for_tile_containing(edge_id).expect("Unable to get tile")
-            });
-            tile.get_opp_edge_index(edge_id)?
-        };
 
-        let opp_tile = tile_cache.entry(opp_edge_index.end_node_id.tile_base_id()).or_insert_with(|| {
-            provider.get_handle_for_tile_containing(opp_edge_index.end_node_id).expect("Unable to get tile")
-        });
-        let opp_edge_id = provider.graph_id_for_opposing_edge_index(opp_edge_index, opp_tile)?;
+    let mut edge_ids = Vec::with_capacity(initial_edge_ids.len() * 2);
+    let mut unresolved_opp_edge_indexes = Vec::new();
+    let mut unresolved_opp_edge_index_lookups = Vec::new();
+
+    // First, we iterate over the very rough list of candidate edge IDs from the edge bins
+    // (a spatial filter) and calculate the opposing edge ID (or as much of it as we can,
+    // depending on whether it touches in the L2 tile).
+    for edge_id in initial_edge_ids {
+        if tile.may_contain_id(edge_id) {
+            let opp_edge_index = tile.get_opp_edge_index(edge_id)?;
+            if opp_edge_index.end_node_id.tile_base_id() == tile_graph_id {
+                // Fast path: the edge and its opposing edge are fully contained within the tile.
+                let opp_edge_id =
+                    provider.graph_id_for_opposing_edge_index(opp_edge_index, &tile)?;
+                edge_ids.push(edge_id);
+                edge_ids.push(opp_edge_id);
+            } else {
+                // The edge starts in this tile but ends in another.
+                // We eventually need to hit another tile, but we can at least build up the index struct.
+                unresolved_opp_edge_indexes.push((edge_id, opp_edge_index));
+            }
+        } else {
+            // The edge doesn't start in this tile (e.g. an L0 or L1 edge); defer processing until later
+            unresolved_opp_edge_index_lookups.push(edge_id);
+        }
+    }
+
+    // Sort the lists of unresolved items so that we don't need to keep churning through tile handles
+    unresolved_opp_edge_indexes.sort_unstable_by_key(|(_, index)| index.end_node_id.tile_base_id());
+    unresolved_opp_edge_index_lookups.sort_unstable_by_key(|id| id.tile_base_id());
+
+    // Set up a tile handle that will be "sticky" (low churn)
+    // as we iterate through the "foreign" edges in tile order
+    let mut other_tile = tile.clone();
+
+    // Resolve opposing edge indexes which originate in the current tile but end in another.
+    for (edge_id, opp_edge_index) in unresolved_opp_edge_indexes {
+        if !other_tile.may_contain_id(opp_edge_index.end_node_id) {
+            other_tile = provider.get_handle_for_tile_containing(opp_edge_index.end_node_id)?;
+        }
+
+        let opp_edge_id = provider.graph_id_for_opposing_edge_index(opp_edge_index, &other_tile)?;
         edge_ids.push(edge_id);
         edge_ids.push(opp_edge_id);
     }
-    // Slight optimization to ensure we hit tiles in a more cache-friendly order.
-    edge_ids.sort();
+
+    // Resolve cases where neither edge is in the current L2 tile
+    for edge_id in unresolved_opp_edge_index_lookups {
+        if !other_tile.may_contain_id(edge_id) {
+            other_tile = provider.get_handle_for_tile_containing(edge_id)?;
+        }
+
+        let opp_edge_id = provider.get_opposing_edge_id(edge_id, &other_tile)?;
+        edge_ids.push(edge_id);
+        edge_ids.push(opp_edge_id);
+    }
+    drop(other_tile);
+
+    // Sort the final vector to ensure we hit tiles in a more cache-friendly order
+    // and don't churn tile handles.
+    edge_ids.sort_unstable();
+
+    // It's possible for an edge to show up multiple times.
+    // This efficiently removes all dupes as the vector is sorted.
+    edge_ids.dedup();
+
     let mut results = Vec::with_capacity(edge_ids.len());
 
+    // Final "sticky" tile handle; we'll iterate in order, so we only need to remember the last one.
+    let mut tile = tile.clone();
+
     // Loop through the pre-filtered edges (only a subset of levels with binning; otherwise all edges)
+    // NOTE: We may currently invoke calculate_distance on both edges in the pair.
+    // There is probably a way to avoid doing this, but initial attempts at stashing the opposing edge ID
+    // in the vector and using a HashMap to save distance calculations didn't show any improvement.
     for edge_id in edge_ids {
         // NOTE: This code IS a bit weird, but it's also like twice as fast as several attempts
         // which broke it out into smaller functions.
@@ -288,7 +341,9 @@ where
                 }
             }
         } else {
-            let tile = provider.get_handle_for_tile_containing(edge_id)?;
+            // Get a new tile handle and store it (the next edge is most likely to be in the same tile)
+            tile = provider.get_handle_for_tile_containing(edge_id)?;
+
             let edge = tile.get_directed_edge(edge_id)?;
             if edge_filter_predicate(edge) {
                 if let Some(d) =
@@ -296,7 +351,7 @@ where
                     && d <= radius
                 {
                     results.push(GraphSearchResult {
-                        handle: tile,
+                        handle: tile.clone(),
                         graph_id: edge_id,
                         approx_distance: d,
                         _marker: PhantomData,
