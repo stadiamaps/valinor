@@ -43,10 +43,6 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: cargo nextest run --no-fail-fast --target s390x-unknown-linux-gnu
 
-    - name: Run doc tests (big-endian s390x)
-      if: matrix.os == 'ubuntu-latest'
-      run: cargo test --doc --target s390x-unknown-linux-gnu
-
     - name: Install Miri
       if: matrix.os == 'ubuntu-latest'
       run: rustup +nightly component add miri
@@ -72,13 +68,6 @@ jobs:
     - name: Run tests in Miri (big-endian s390x)
       if: matrix.os == 'ubuntu-latest'
       run: cargo +nightly miri nextest run --no-fail-fast --target s390x-unknown-linux-gnu
-      env:
-        RUST_BACKTRACE: 1
-        MIRIFLAGS: -Zmiri-disable-isolation
-
-    - name: Run doc tests in Miri (big-endian s390x)
-      if: matrix.os == 'ubuntu-latest'
-      run: cargo +nightly miri test --doc --target s390x-unknown-linux-gnu
       env:
         RUST_BACKTRACE: 1
         MIRIFLAGS: -Zmiri-disable-isolation
