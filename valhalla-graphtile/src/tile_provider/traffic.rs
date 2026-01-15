@@ -32,7 +32,7 @@ use std::path::Path;
 /// **It is the responsibility of the caller to ensure that the platform is able to perform
 /// loads and stores of 64-bit values atomically.**
 pub struct TrafficTileProvider<const MUT: bool> {
-    tarball_tile_provider: TarballTileProvider<MUT>,
+    tarball_tile_provider: TarballTileProvider<MUT, false>,
 }
 
 impl<const MUT: bool> TrafficTileProvider<MUT> {
@@ -48,7 +48,7 @@ impl<const MUT: bool> TrafficTileProvider<MUT> {
     /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
     /// so an incorrect index will invariably lead to tile fetch errors.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
-        let tarball_tile_provider = TarballTileProvider::new(path)?;
+        let tarball_tile_provider = unsafe { TarballTileProvider::init(path)? };
         Ok(Self {
             tarball_tile_provider,
         })
@@ -159,6 +159,7 @@ impl TrafficTileProvider<false> {
     /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
     /// so an incorrect index will invariably lead to tile fetch errors.
     pub fn new_readonly<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+        // SAFETY: Immutability is guaranteed by the const generic
         Self::new(path)
     }
 }

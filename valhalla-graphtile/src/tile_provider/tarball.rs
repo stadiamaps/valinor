@@ -45,7 +45,7 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 ///
 /// Additionally, extreme care must be taken when the file may be modified by an external process.
 /// The current implementation is primarily designed around volatile memory access.
-pub struct TarballTileProvider<const MUT: bool> {
+pub struct TarballTileProvider<const MUT: bool, const CACHE: bool> {
     /// The file backing the mmap.
     ///
     /// This is unused, but we need to keep it in scope since the memmap only has a reference to it,
@@ -55,10 +55,48 @@ pub struct TarballTileProvider<const MUT: bool> {
     mmap: Arc<MmapRaw>,
     /// An index of offsets and sizes which enables quick tile extraction from the memory map.
     tile_index: HashMap<GraphId, TileOffset>,
+    /// An immutable tile cache.
+    ///
+    /// While loading tiles from the tarball is zero-copy,
+    /// it is not strictly zero-cost.
+    /// A typical lookup requires these steps:
+    ///
+    /// - Hashmap look up by graph ID in `tile_index`
+    /// - Construct a tile pointer
+    /// - Create a slice to the raw bytes
+    /// - Check the validity of the bytes before transmuting the pointer
+    ///
+    /// This overhead is very small,
+    /// but a strenuous workload like map matching millions of short segments
+    /// demonstrates that there is real overhead here.
+    ///
+    /// If (and only if!) the user guarantees that the underlying memory map will never be mutated,
+    /// we can front-load all the sanity checks and convert every tile resolution
+    /// into a single hashmap lookup.
+    /// This only works if the underlying shared memory is immutable though,
+    /// as mutation of memory backing a slice with a shared reference
+    /// is undefined behavior: https://doc.rust-lang.org/reference/behavior-considered-undefined.html#r-undefined.immutable.
+    tile_cache: HashMap<GraphId, Arc<MmapGraphTileHandle>>,
 }
 
-impl<const MUT: bool> TarballTileProvider<MUT> {
-    fn init<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
+    /// Creates a new tarball tile provider from the given path.
+    ///
+    /// # Safety
+    ///
+    /// If `CACHE` is `true`, the caller must guarantee that the underlying memory map
+    /// is never mutated during the lifetime of the object.
+    /// Mutation results in undefined behavior.
+    ///
+    /// # Errors
+    ///
+    /// This may fail if the index is invalid or missing.
+    /// It will also fail if `with_cache` is `true`, but a tile is malformed.
+    pub(in crate::tile_provider) unsafe fn init<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+        const {
+            assert!(!(MUT && CACHE), "TarballTileProvider<true, true> is not allowed; cache is not safe combined with mutability.");
+        }
+
         let mut archive = Archive::new(File::open(&path)?);
         let mut entries = archive.entries()?;
 
@@ -114,26 +152,26 @@ impl<const MUT: bool> TarballTileProvider<MUT> {
             Arc::new(MmapOptions::new().map_raw_read_only(&file)?)
         };
 
+        let mut tile_cache = HashMap::new();
+
+        if CACHE {
+            for (graph_id, tile_offset) in &tile_index {
+                let tile_pointer = MmapTilePointer {
+                    mmap: mmap.clone(),
+                    offsets: *tile_offset,
+                };
+                // SAFETY: We document the immutability conditions in the method docs
+                let tile_handle = Arc::new(unsafe { MmapGraphTileHandle::try_from(tile_pointer)? });
+                tile_cache.insert(*graph_id, tile_handle);
+            }
+        }
+
         Ok(Self {
             _file: file,
             mmap,
             tile_index,
+            tile_cache,
         })
-    }
-
-    /// Creates a new tarball tile provider from an existing extract.
-    ///
-    /// # Errors
-    ///
-    /// The extract _must_ include an `index.bin` file as the first entry.
-    /// If the file is not _valid_ (of the correct length and superficially correct structure),
-    /// this constructor will fail.
-    ///
-    /// However, no further checks are performed to ensure the correctness of the file
-    /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
-    /// so an incorrect index will invariably lead to tile fetch errors.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
-        Self::init(path)
     }
 
     /// An iterator over all tile IDs contained in the tarball, in arbitrary order.
@@ -142,7 +180,7 @@ impl<const MUT: bool> TarballTileProvider<MUT> {
     }
 }
 
-impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
+impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, false> {
     type TileHandle = Arc<MmapGraphTileHandle>;
 
     #[inline]
@@ -176,6 +214,45 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
         Ok(Arc::new(unsafe { MmapGraphTileHandle::try_from(pointer)? }))
     }
 
+    #[inline]
+    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(&self, center: Point<N>, radius: N) -> Vec<GraphId> {
+        self.tiles_within_radius(center, radius)
+    }
+}
+
+impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, true> {
+    type TileHandle = Arc<MmapGraphTileHandle>;
+
+    #[inline]
+    fn with_tile_containing<F, T>(
+        &self,
+        graph_id: GraphId,
+        process: F,
+    ) -> Result<T, GraphTileProviderError>
+    where
+        F: FnOnce(&GraphTileView) -> T,
+    {
+        let tile = self.tile_cache.get(&graph_id.tile_base_id()).ok_or(GraphTileProviderError::TileDoesNotExist)?;
+        Ok(process(tile.borrow_dependent()))
+    }
+
+    #[inline]
+    fn get_handle_for_tile_containing(
+        &self,
+        graph_id: GraphId,
+    ) -> Result<Self::TileHandle, GraphTileProviderError> {
+        let tile = self.tile_cache.get(&graph_id.tile_base_id()).ok_or(GraphTileProviderError::TileDoesNotExist)?;
+        Ok(tile.clone())
+    }
+
+    #[inline]
+    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(&self, center: Point<N>, radius: N) -> Vec<GraphId> {
+        self.tiles_within_radius(center, radius)
+    }
+}
+
+impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
+    #[inline]
     fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
@@ -197,7 +274,7 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT> {
     }
 }
 
-impl<const MUT: bool> TarballTileProvider<MUT> {
+impl<const MUT: bool> TarballTileProvider<MUT, false> {
     /// Gets a pointer for the tile containing this graph ID.
     ///
     /// # Errors
@@ -220,8 +297,18 @@ impl<const MUT: bool> TarballTileProvider<MUT> {
     }
 }
 
-impl TarballTileProvider<false> {
+impl TarballTileProvider<false, false> {
     /// Creates a new tarball tile provider from an existing extract.
+    ///
+    /// This constructor creates the memory mapping in read-only mode,
+    /// but it does not strictly assume that the underlying memory is immutable.
+    /// This constructor is safe, but underlying memory access is subject to conditions
+    /// which are noted in the various access methods on pointers.
+    /// Refer to the [`TarballTileProvider`] documentation for a fuller safety discussion.
+    ///
+    /// If you guarantee that the tarball bytes will _never_ be mutated in any way
+    /// during the life of the provider, you can use [`TarballTileProvider::new_immutable`]
+    /// for better performance over the long run.
     ///
     /// # Errors
     ///
@@ -233,11 +320,46 @@ impl TarballTileProvider<false> {
     /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
     /// so an incorrect index will invariably lead to tile fetch errors.
     pub fn new_readonly<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
-        Self::new(path)
+        // SAFETY: Immutability is guaranteed by the const generic
+        unsafe { Self::init(path) }
     }
 }
 
-impl TarballTileProvider<true> {
+impl TarballTileProvider<false, true> {
+    /// Creates a new tarball tile provider from an immutable extract.
+    ///
+    /// Normally there is a small amount of overhead when accessing graph tiles due to validation
+    /// to ensure that the memory layout is correct (it's zero copy, but not zero cost).
+    /// You pay this cost on every tile access for tile providers constructed with
+    /// [`TarballTileProvider::new_readonly`] or [`TarballTileProvider::new_immutable`].
+    ///
+    /// This constructor front-loads the validation work so that subsequent tile access
+    /// is O(1).
+    /// In exchange, this requires stronger guarantees, which is why it's marked unsafe.
+    ///
+    /// # Safety
+    ///
+    /// If you use this constructor, you *must* guarantee that the backing memory and file
+    /// are immutable during the lifetime of the object.
+    /// Any mutation of the underlying memory results in undefined behavior.
+    ///
+    /// If you cannot make these guarantees, but do not require mutability,
+    /// use [`TarballTileProvider::new_readonly`] instead.
+    ///
+    /// # Errors
+    ///
+    /// The extract _must_ include an `index.bin` file as the first entry.
+    /// If the file is not _valid_ (of the correct length and superficially correct structure),
+    /// this constructor will fail.
+    ///
+    /// This will also fail if any tile is obviously malformed.
+    pub unsafe fn new_immutable<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+        // SAFETY: Immutability requirement documented in docstring
+        unsafe { Self::init(path) }
+    }
+}
+
+impl TarballTileProvider<true, false> {
     /// Creates a new tarball tile provider from an existing extract.
     /// Write support is enabled by this constructor.
     ///
@@ -251,7 +373,8 @@ impl TarballTileProvider<true> {
     /// (its entire _raison d'être_ is that you shouldn't have to scan the whole tarball),
     /// so an incorrect index will invariably lead to tile fetch errors.
     pub fn new_mutable<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
-        Self::new(path)
+        // SAFETY: CACHE=false is guaranteed by the const generic
+        unsafe { Self::init(path) }
     }
 
     /// Flushes outstanding memory map modifications to disk.
@@ -470,7 +593,9 @@ mod test {
             .join("fixtures")
             .join("andorra-tiles.tar");
         let tarball_provider =
-            TarballTileProvider::new_readonly(tarball_path).expect("Unable to init tile provider");
+            TarballTileProvider::new_readonly(tarball_path.clone()).expect("Unable to init tile provider");
+        let immutable_tarball_provider =
+            unsafe { TarballTileProvider::new_immutable(tarball_path).expect("Unable to init tile provider") };
 
         for graph_id in tile_ids {
             let directory_tile = directory_provider
@@ -482,6 +607,12 @@ mod test {
             let tarball_tile_bytes = unsafe { tarball_tile_pointer.as_tile_bytes() };
 
             assert_eq!(directory_tile.borrow_owner(), tarball_tile_bytes);
+
+            let immutable_tarball_tile_pointer = immutable_tarball_provider
+                .get_handle_for_tile_containing(*graph_id)
+                .expect("Unable to get tile");
+            let immutable_tarball_tile_bytes = unsafe { immutable_tarball_tile_pointer.borrow_owner().as_tile_bytes() };
+            assert_eq!(directory_tile.borrow_owner(), immutable_tarball_tile_bytes);
         }
     }
 }
