@@ -308,10 +308,7 @@ pub trait GraphTile {
         let sw = header.sw_corner();
 
         // Set up an approximator based on square distance.
-        // This will always over-estimate (by about 5% for smaller distances).
-        // Since there are no false positives,
-        // we can avoid the more expensive Haversine calculations
-        // for *most* nodes.
+        // This is good enough for reasonable distances (<1m for distances up to a few tens of km).
         let approximator = DistanceApproximator::new(center.into());
         let radius_squared = radius_in_meters * radius_in_meters;
 

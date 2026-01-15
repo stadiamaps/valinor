@@ -556,7 +556,7 @@ mod tests {
             }) {
                 assert!(
                     provider
-                        .nodes_within_radius(|_| true, node.coordinate(sw).into(), 25.0,)
+                        .nodes_within_radius(|_| true, node.coordinate(sw).into(), 25.0)
                         .any(|res| {
                             match res {
                                 Ok(node_ref) => {

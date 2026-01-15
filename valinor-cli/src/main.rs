@@ -144,7 +144,7 @@ fn main() -> anyhow::Result<()> {
                     RoutingGraphDataSource::Tarball(path) => {
                         info!(path = path.to_str(), "Using tarball tile extract");
 
-                        let provider = TarballTileProvider::<false>::new(&path)?;
+                        let provider = TarballTileProvider::new_readonly(&path)?;
                         pretty_print_edge_info(&provider, traffic_extract.as_ref(), gid)
                     }
                     RoutingGraphDataSource::TileDir(path) => {

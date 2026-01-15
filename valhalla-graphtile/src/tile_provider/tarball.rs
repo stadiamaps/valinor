@@ -420,14 +420,14 @@ mod test {
         assert_eq!(index_entries[2].size.get(), 1_809_704);
     }
 
+    // Tragically, memory maps are not supported by Miri!
     #[cfg(not(miri))]
     #[test]
     fn test_get_tile() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles.tar");
-        let provider: TarballTileProvider<false> =
-            TarballTileProvider::new(path).expect("Unable to init tile provider");
+        let provider = TarballTileProvider::new_readonly(path).expect("Unable to init tile provider");
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile_pointer = provider
             .get_pointer_for_tile_containing(graph_id)
@@ -440,6 +440,7 @@ mod test {
         assert_eq!(tile.header().graph_id().value(), graph_id.value());
     }
 
+    // Tragically, memory maps are not supported by Miri!
     #[cfg(not(miri))]
     #[test]
     fn test_tiles_are_identical_to_directory() {
@@ -448,14 +449,15 @@ mod test {
         // Probably goes without saying, but the tarball was created using
         // valhalla_build_extract from the andorra-tiles directory.
 
+        // Indexes are all intentionally non-zero to test that the provider impl fetches based on the base ID
         let tile_ids = &[
-            GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID"),
-            GraphId::try_from_components(1, 47701, 0).expect("Unable to create graph ID"),
-            GraphId::try_from_components(2, 762485, 0).expect("Unable to create graph ID"),
-            GraphId::try_from_components(2, 762486, 0).expect("Unable to create graph ID"),
-            GraphId::try_from_components(2, 763925, 0).expect("Unable to create graph ID"),
-            GraphId::try_from_components(2, 763926, 0).expect("Unable to create graph ID"),
-            GraphId::try_from_components(2, 763927, 0).expect("Unable to create graph ID"),
+            GraphId::try_from_components(0, 3015, 1).expect("Unable to create graph ID"),
+            GraphId::try_from_components(1, 47701, 1).expect("Unable to create graph ID"),
+            GraphId::try_from_components(2, 762485, 1).expect("Unable to create graph ID"),
+            GraphId::try_from_components(2, 762486, 1).expect("Unable to create graph ID"),
+            GraphId::try_from_components(2, 763925, 1).expect("Unable to create graph ID"),
+            GraphId::try_from_components(2, 763926, 1).expect("Unable to create graph ID"),
+            GraphId::try_from_components(2, 763927, 1).expect("Unable to create graph ID"),
         ];
 
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
