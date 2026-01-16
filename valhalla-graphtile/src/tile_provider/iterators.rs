@@ -10,15 +10,15 @@ use crate::graph_tile::{DirectedEdge, GraphTile, NodeInfo};
 use crate::spatial::{DistanceApproximator, bbox_with_center};
 use crate::tile_hierarchy::STANDARD_LEVELS;
 use crate::tile_provider::{GraphTileProvider, GraphTileProviderError};
+use core::cell::LazyCell;
+use core::fmt::Display;
+use core::marker::PhantomData;
 use geo::{
     Closest, ClosestPoint, CoordFloat, Distance, GeoFloat, HasDimensions, Haversine, LineString,
     Point, Validation, coord,
 };
 use num_traits::FromPrimitive;
-use std::cell::LazyCell;
 use std::collections::VecDeque;
-use std::fmt::Display;
-use std::marker::PhantomData;
 
 /// A handle to an object in the graph in response to a search.
 pub struct GraphSearchResult<T, N: CoordFloat + FromPrimitive, H: GraphTile> {

@@ -29,11 +29,14 @@ bit-twiddling-helpers = { path = "bit-twiddling-helpers" }
 chrono = "0.4.42"
 clap = { version = "4.5.45", features = ["derive", "env"] }
 dashmap = "6.1.0"
+enumset = "1.1.10"
+flatgeobuf = { version = "6.0.1", default-features = false }
 geo = "0.32.0"
 geozero = "0.15.1"
 http = "1.3.1"
 indicatif = "0.18.0"
 insta = { version = "1.40.0", features = ["yaml"] }
+integer-encoding = "4.1.0"
 itertools = "0.14.0"
 lru = "0.16.0"
 memmap2 = "0.9.9"
@@ -41,19 +44,29 @@ num-traits = "0.2"
 num_enum = "0.7.5"
 nutype = { version = "0.6.2" }
 proptest = "1.8.0"
+prost = "0.14.3"
+prost-build = "0.14.3"
+protobuf-src = "2.1.1"
+protoc-bin-vendored = "3.2.0"
 rand = "0.9.0"
+self_cell = "1.2.2"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_with = "3.14.0"
 serde_json = "1.0.132"
+tar = "0.4.44"
 thiserror = "2.0.11"
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "fs", "io-util", "sync"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+trig-const = "0.3.0"
+valhalla-graphtile = { path = "valhalla-graphtile" }
 valhalla-proto = { path = "valhalla-proto" }
 valhalla-microservice = { path = "valhalla-microservice" }
 valhalla-response = { path = "valhalla-response" }
+walkdir = "2.5.0"
 zerocopy = "0.8.5"
 zerocopy-derive = "0.8.5"
+zeromq = "0.5.0-pre"
 
 [profile.dev.package]
 insta.opt-level = 3

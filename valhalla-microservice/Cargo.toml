@@ -19,7 +19,7 @@ tracing = { workspace = true }
 valhalla-proto = { workspace = true }
 zerocopy = { workspace = true }
 zerocopy-derive = { workspace = true }
-zeromq = "0.5.0-pre"
+zeromq = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

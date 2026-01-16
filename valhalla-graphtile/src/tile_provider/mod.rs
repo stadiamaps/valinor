@@ -5,10 +5,10 @@
 //! due to the fundamental difference in how memory maps work vs file systems.
 
 use crate::GraphId;
+use core::fmt::Display;
 use dashmap::DashMap;
 use geo::{CoordFloat, GeoFloat, Point};
 use num_traits::FromPrimitive;
-use std::fmt::Display;
 use std::sync::Arc;
 use std::sync::Mutex;
 use thiserror::Error;

@@ -2,7 +2,7 @@ mod proto;
 
 pub use proto::*;
 
-// Re-export protobuf lib (for the traits)
+// Re-export protobuf lib (for the traits).
 pub use prost;
 
 #[cfg(test)]

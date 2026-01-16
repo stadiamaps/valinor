@@ -11,24 +11,24 @@ rust-version.workspace = true
 serde = ["dep:serde", "nutype/serde"]
 
 [dependencies]
-tar = "0.4.44"
+tar = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-self_cell = "1.2.0"
+self_cell = { workspace = true }
 thiserror = { workspace = true }
 num-traits = { workspace = true }
 geo = { workspace = true }
 bitfield-struct = { workspace = true }
 bit-twiddling-helpers = { workspace = true }
-enumset = "1.1.10"
-integer-encoding = "4.1.0"
+enumset = { workspace = true }
+integer-encoding = { workspace = true }
 lru = { workspace = true }
 memmap2 = { workspace = true }
 nutype = { workspace = true }
 num_enum = { workspace = true }
 tracing = { workspace = true }
-trig-const = "0.3.0"
+trig-const = { workspace = true }
 serde = { workspace = true, optional = true }
 zerocopy = { workspace = true }
 zerocopy-derive = { workspace = true }
@@ -37,7 +37,7 @@ zerocopy-derive = { workspace = true }
 insta = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
-walkdir = "2.5.0"
+walkdir = { workspace = true }
 
 [lints]
 workspace = true

@@ -10,12 +10,12 @@ rust-version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-flatgeobuf = { version = "6.0.1", default-features = false }
+flatgeobuf = { workspace = true }
 geozero = { workspace = true }
 indicatif = { workspace = true }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
-valhalla-graphtile = { path = "../valhalla-graphtile", features = ["serde"] }
+valhalla-graphtile = { workspace = true, features = ["serde"] }
 
 [lints]
 workspace = true

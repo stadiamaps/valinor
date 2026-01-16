@@ -36,7 +36,7 @@ enum Commands {
 }
 
 fn parse_graph_id(input: &str) -> anyhow::Result<GraphId> {
-    // Try pure integer
+    // Try to parse as a pure integer.
     if let Ok(id) = input.parse::<u64>() {
         return GraphId::try_from_id(id).map_err(|e| anyhow!(e));
     }
@@ -120,7 +120,7 @@ fn pretty_print_edge_info<T: GraphTileProvider>(
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        // Standard logger, configured via the RUST_LOG env variable
+        // Standard logger, configured via the RUST_LOG env variable.
         .with(tracing_subscriber::fmt::layer().with_filter(EnvFilter::from_default_env()))
         .init();
 
@@ -138,7 +138,7 @@ fn main() -> anyhow::Result<()> {
                 None
             };
 
-            // Prefer tarball if set, fall back to directory
+            // Prefer tarball if set, fall back to directory.
             if let Some(graph) = sources.routing_graph {
                 match graph {
                     RoutingGraphDataSource::Tarball(path) => {
