@@ -2,7 +2,11 @@
 name = "valhalla-response"
 description = "Data structures and helpers for generating Valhalla-compatible responses."
 version = "0.1.0"
-edition = "2024"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 serde = { workspace = true }

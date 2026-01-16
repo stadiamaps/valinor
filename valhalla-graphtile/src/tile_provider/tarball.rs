@@ -24,8 +24,7 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 /// # Tarball requirements/assumptions
 ///
 /// Valhalla is capable of reading almost any tarball containing graph tiles.
-/// At the moment, our aspirations are not so lofty,
-/// so we *require* an `index.bin` file.
+/// Valinor is much less tolerant, and *requires* an `index.bin` file.
 ///
 /// Modern Valhalla tooling like `valhalla_build_extract`
 /// will write this automatically, but if you're still hand-rolling tarballs with a `bash` script,
@@ -92,9 +91,14 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
     ///
     /// This may fail if the index is invalid or missing.
     /// It will also fail if `with_cache` is `true`, but a tile is malformed.
-    pub(in crate::tile_provider) unsafe fn init<P: AsRef<Path>>(path: P) -> Result<Self, GraphTileProviderError> {
+    pub(in crate::tile_provider) unsafe fn init<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<Self, GraphTileProviderError> {
         const {
-            assert!(!(MUT && CACHE), "TarballTileProvider<true, true> is not allowed; cache is not safe combined with mutability.");
+            assert!(
+                !(MUT && CACHE),
+                "TarballTileProvider<true, true> is not allowed; cache is not safe combined with mutability."
+            );
         }
 
         let mut archive = Archive::new(File::open(&path)?);
@@ -215,7 +219,11 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, false> {
     }
 
     #[inline]
-    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(&self, center: Point<N>, radius: N) -> Vec<GraphId> {
+    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
+        &self,
+        center: Point<N>,
+        radius: N,
+    ) -> Vec<GraphId> {
         self.tiles_within_radius(center, radius)
     }
 }
@@ -232,7 +240,10 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, true> {
     where
         F: FnOnce(&GraphTileView) -> T,
     {
-        let tile = self.tile_cache.get(&graph_id.tile_base_id()).ok_or(GraphTileProviderError::TileDoesNotExist)?;
+        let tile = self
+            .tile_cache
+            .get(&graph_id.tile_base_id())
+            .ok_or(GraphTileProviderError::TileDoesNotExist)?;
         Ok(process(tile.borrow_dependent()))
     }
 
@@ -241,12 +252,19 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, true> {
         &self,
         graph_id: GraphId,
     ) -> Result<Self::TileHandle, GraphTileProviderError> {
-        let tile = self.tile_cache.get(&graph_id.tile_base_id()).ok_or(GraphTileProviderError::TileDoesNotExist)?;
+        let tile = self
+            .tile_cache
+            .get(&graph_id.tile_base_id())
+            .ok_or(GraphTileProviderError::TileDoesNotExist)?;
         Ok(tile.clone())
     }
 
     #[inline]
-    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(&self, center: Point<N>, radius: N) -> Vec<GraphId> {
+    fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
+        &self,
+        center: Point<N>,
+        radius: N,
+    ) -> Vec<GraphId> {
         self.tiles_within_radius(center, radius)
     }
 }
@@ -550,7 +568,8 @@ mod test {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles.tar");
-        let provider = TarballTileProvider::new_readonly(path).expect("Unable to init tile provider");
+        let provider =
+            TarballTileProvider::new_readonly(path).expect("Unable to init tile provider");
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile_pointer = provider
             .get_pointer_for_tile_containing(graph_id)
@@ -592,10 +611,11 @@ mod test {
         let tarball_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join("andorra-tiles.tar");
-        let tarball_provider =
-            TarballTileProvider::new_readonly(tarball_path.clone()).expect("Unable to init tile provider");
-        let immutable_tarball_provider =
-            unsafe { TarballTileProvider::new_immutable(tarball_path).expect("Unable to init tile provider") };
+        let tarball_provider = TarballTileProvider::new_readonly(tarball_path.clone())
+            .expect("Unable to init tile provider");
+        let immutable_tarball_provider = unsafe {
+            TarballTileProvider::new_immutable(tarball_path).expect("Unable to init tile provider")
+        };
 
         for graph_id in tile_ids {
             let directory_tile = directory_provider
@@ -611,7 +631,11 @@ mod test {
             let immutable_tarball_tile_pointer = immutable_tarball_provider
                 .get_handle_for_tile_containing(*graph_id)
                 .expect("Unable to get tile");
-            let immutable_tarball_tile_bytes = unsafe { immutable_tarball_tile_pointer.borrow_owner().as_tile_bytes() };
+            let immutable_tarball_tile_bytes = unsafe {
+                immutable_tarball_tile_pointer
+                    .borrow_owner()
+                    .as_tile_bytes()
+            };
             assert_eq!(directory_tile.borrow_owner(), immutable_tarball_tile_bytes);
         }
     }

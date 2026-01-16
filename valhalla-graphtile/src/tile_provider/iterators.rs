@@ -364,11 +364,12 @@ where
     Ok(results)
 }
 
-/// Pre-filters edge IDs in a tile based on a query point and radius.
+/// Returns a pre-filtered list of edge IDs in a tile,
+/// based on a query point and radius using edge bins as a rough index.
 ///
 /// This function assumes that tiles at level 2 have valid edge bins
 /// (a standard step in the Valhalla tile build).
-/// If edge bins don't exist at level 2, this function will fail to find such edges.
+/// If edge bins don't exist at level 2, this function will fail to find any edges.
 fn prefilter_edge_ids<T: GraphTile, N: CoordFloat + FromPrimitive>(
     tile: &T,
     query_point: Point<N>,

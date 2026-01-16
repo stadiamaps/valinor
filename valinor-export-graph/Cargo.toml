@@ -1,9 +1,11 @@
 [package]
 name = "valinor-export-graph"
 version = "0.1.0"
-edition = "2024"
-license = "BSD-3-Clause"
-authors = ["Ian Wagner <ian@stadiamaps.com>"]
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }

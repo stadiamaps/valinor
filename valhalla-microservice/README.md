@@ -13,6 +13,7 @@ but it also provides an extension point which allows for alternate implementatio
 Pretty clever design!
 
 All communication happens via ZeroMQ.
+Messages are passed in Protobuf format using a standard schema (see the [valhalla-proto crate](../valhalla-proto)).
 The classic `valhalla_service` is a single process running all the services,
 but it doesn't have to be this way.
 In fact, all the communication happens over ZeroMQ,
