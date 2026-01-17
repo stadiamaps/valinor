@@ -144,6 +144,10 @@ impl<F: Fn(&NodeInfo) -> bool, P: GraphTileProvider, N: CoordFloat + FromPrimiti
 
         let tile_handle = match self.provider.get_handle_for_tile_containing(base_id) {
             Ok(tile_handle) => tile_handle,
+            Err(GraphTileProviderError::TileDoesNotExist) => {
+                // A tile in the search set may legitimately not exist (e.g. a partial extract)
+                return self.next();
+            }
             Err(err) => {
                 return Some(Err(err));
             }
@@ -187,6 +191,10 @@ impl<
 
         let tile_handle = match self.provider.get_handle_for_tile_containing(base_id) {
             Ok(tile_handle) => tile_handle,
+            Err(GraphTileProviderError::TileDoesNotExist) => {
+                // A tile in the search set may legitimately not exist (e.g. a partial extract)
+                return self.next();
+            }
             Err(err) => {
                 return Some(Err(err));
             }
@@ -251,8 +259,7 @@ where
     let mut unresolved_opp_edge_index_lookups = Vec::new();
 
     // First, we iterate over the very rough list of candidate edge IDs from the edge bins
-    // (a spatial filter) and calculate the opposing edge ID (or as much of it as we can,
-    // depending on whether it touches in the L2 tile).
+    // (a spatial filter) and calculate the opposing edge ID (or as much of it as we can).
     for edge_id in initial_edge_ids {
         if tile.may_contain_id(edge_id) {
             let opp_edge_index = tile.get_opp_edge_index(edge_id)?;
@@ -322,41 +329,23 @@ where
     // There is probably a way to avoid doing this, but initial attempts at stashing the opposing edge ID
     // in the vector and using a HashMap to save distance calculations didn't show any improvement.
     for edge_id in edge_ids {
-        // NOTE: This code IS a bit weird, but it's also like twice as fast as several attempts
-        // which broke it out into smaller functions.
-        if tile.may_contain_id(edge_id) {
-            // Fast path
-            let edge = tile.get_directed_edge(edge_id)?;
-            if edge_filter_predicate(edge) {
-                if let Some(d) =
-                    calculate_distance(&tile, edge, &approximator, query_point, radius)?
-                    && d <= radius
-                {
-                    results.push(GraphSearchResult {
-                        handle: tile.clone(),
-                        graph_id: edge_id,
-                        approx_distance: d,
-                        _marker: PhantomData,
-                    });
-                }
-            }
-        } else {
+        if !tile.may_contain_id(edge_id) {
             // Get a new tile handle and store it (the next edge is most likely to be in the same tile)
             tile = provider.get_handle_for_tile_containing(edge_id)?;
+        }
 
-            let edge = tile.get_directed_edge(edge_id)?;
-            if edge_filter_predicate(edge) {
-                if let Some(d) =
-                    calculate_distance(&tile, edge, &approximator, query_point, radius)?
-                    && d <= radius
-                {
-                    results.push(GraphSearchResult {
-                        handle: tile.clone(),
-                        graph_id: edge_id,
-                        approx_distance: d,
-                        _marker: PhantomData,
-                    });
-                }
+        let edge = tile.get_directed_edge(edge_id)?;
+        if edge_filter_predicate(edge) {
+            if let Some(d) =
+                calculate_distance(&tile, edge, &approximator, query_point, radius)?
+                && d <= radius
+            {
+                results.push(GraphSearchResult {
+                    handle: tile.clone(),
+                    graph_id: edge_id,
+                    approx_distance: d,
+                    _marker: PhantomData,
+                });
             }
         }
     }

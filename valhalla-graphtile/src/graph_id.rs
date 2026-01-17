@@ -99,8 +99,6 @@ pub enum InvalidGraphIdError {
     Eq,
     PartialEq,
     Hash,
-    Ord,
-    PartialOrd,
 )]
 pub struct GraphId(U64<LE>);
 
@@ -262,6 +260,38 @@ impl GraphId {
 
         // Build and return the final string
         Ok(PathBuf::from(self.level().to_string()).join(tile_id_component))
+    }
+}
+
+impl Ord for GraphId {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let level = self.level();
+        let other_level = other.level();
+        let tile_id = self.tile_id();
+        let other_tile_id = other.tile_id();
+
+        if level != other_level {
+            // Different levels
+            // NOTE: We implement the ordering by level in REVERSE!
+            // This is because the call sites where we actually do sorting
+            // typically start with an L2 tile first.
+            // level.cmp(&other_level)
+            other_level.cmp(&level)
+        } else if tile_id != other_tile_id {
+            // Same level, but different tile
+            return tile_id.cmp(&other_tile_id)
+        } else {
+            // Same tile
+            self.feature_index().cmp(&other.feature_index())
+        }
+    }
+}
+
+impl PartialOrd for GraphId {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
