@@ -87,8 +87,11 @@ impl<'prov, F: Fn(&NodeInfo) -> bool, P: GraphTileProvider, N: CoordFloat + From
         filter_predicate: F,
         center: Point<N>,
         radius_in_meters: N,
-        tile_ids: Vec<GraphId>,
+        mut tile_ids: Vec<GraphId>,
     ) -> Self {
+        // We can use the edge bins at L2 which also contain L0 and L1 edges; clever, right?
+        tile_ids.retain(|tile| tile.level() == 2);
+
         Self {
             provider,
             filter_predicate,
@@ -153,23 +156,21 @@ impl<F: Fn(&NodeInfo) -> bool, P: GraphTileProvider, N: CoordFloat + FromPrimiti
             }
         };
 
-        // Stream items from the current tile, storing everything but the node info reference,
-        // since we can reconstruct it later.
-        // The tile handle clones are cheap (this is a documented assumption in the trait).
-        let iter = tile_handle.nodes_within_radius(
+        match nodes_within_radius(
+            self.provider,
+            tile_handle,
             &self.filter_predicate,
             self.center,
             self.radius_in_meters,
-        );
-        self.buffer
-            .extend(iter.map(|(graph_node, distance)| GraphSearchResult {
-                handle: tile_handle.clone(),
-                graph_id: graph_node.node_id,
-                approx_distance: distance,
-                _marker: PhantomData,
-            }));
-
-        self.next()
+        ) {
+            Ok(results) => {
+                self.buffer.extend(results);
+                self.next()
+            }
+            Err(err) => {
+                Some(Err(err))
+            }
+        }
     }
 }
 
@@ -216,6 +217,174 @@ impl<
         }
 
         self.next()
+    }
+}
+
+/// A helper function that finds nodes using L2 edge bins as a spatial filter.
+///
+/// This function uses edge bins to prune the search space without iterating over every node in the tile
+/// (and in some cases, skipping tile levels entirely).
+fn nodes_within_radius<
+    P: GraphTileProvider,
+    F,
+    N: CoordFloat + FromPrimitive,
+>(
+    provider: &P,
+    tile: P::TileHandle,
+    node_filter_predicate: F,
+    query_point: Point<N>,
+    radius: N,
+) -> Result<Vec<GraphSearchResult<NodeInfo, N, P::TileHandle>>, GraphTileProviderError>
+where
+    F: Fn(&NodeInfo) -> bool,
+{
+    let approximator = DistanceApproximator::new(query_point.into());
+    let radius_squared = radius * radius;
+    let tile_graph_id = tile.graph_id();
+
+    // Use edge bins to get a set of candidate *edges*.
+    let initial_edge_ids = prefilter_edge_ids(&tile, query_point, radius);
+
+    let mut results = Vec::with_capacity(initial_edge_ids.len());
+    let mut unresolved_edge_ids = Vec::new();
+    let mut deferred_node_lookups = Vec::with_capacity(initial_edge_ids.len());
+
+    // First, we iterate over the very rough list of candidate edge IDs from the edge bins
+    // (a spatial filter) and find the start and end node ID (or as much of it as we can).
+    for edge_id in initial_edge_ids {
+        if tile.may_contain_id(edge_id) {
+            // Edge is in the original tile
+            let edge = tile.get_directed_edge(edge_id)?;
+            let end_node_id = edge.end_node_id();
+
+            if tile.may_contain_id(end_node_id) {
+                // Fast path: node ends in the same tile
+                if let Some(result) = filter_node(&approximator, end_node_id, &tile, &node_filter_predicate, radius_squared) {
+                    results.push(result);
+                }
+            } else {
+                // Node ends in a different tile
+                deferred_node_lookups.push(end_node_id);
+            }
+
+            // To get the start node, we need to follow the opposing edge.
+            let opp_edge_index = tile.get_opp_edge_index(edge_id)?;
+            if opp_edge_index.end_node_id.tile_base_id() == tile_graph_id {
+                // The opposing edge is contained within the tile
+                let opp_edge_id = provider.graph_id_for_opposing_edge_index(opp_edge_index, &tile)?;
+                let start_node_id = tile.get_directed_edge(opp_edge_id)?.end_node_id();
+                if tile.may_contain_id(start_node_id) {
+                    // Fast path: the start node is also contained within the tile
+                    if let Some(result) = filter_node(&approximator, start_node_id, &tile, &node_filter_predicate, radius_squared) {
+                        results.push(result);
+                    }
+                } else {
+                    deferred_node_lookups.push(start_node_id);
+                }
+            } else {
+                // The opposing edge is in a different tile. Assuming edge binning is correct,
+                // the other tile should eventually come up.
+                // TODO: Verify this assumption
+            }
+        } else {
+            // Edge is in another tile.
+            unresolved_edge_ids.push(edge_id);
+        }
+    }
+
+    // Sort unresolved edge IDs by tile to minimize tile handle churn.
+    unresolved_edge_ids.sort_unstable_by_key(|id| id.tile_base_id());
+
+    // Resolve edges from other tiles.
+    let mut tile = tile;
+    let mut other_tile_graph_id = tile.graph_id();
+    for edge_id in unresolved_edge_ids {
+        if !tile.may_contain_id(edge_id) {
+            tile = provider.get_handle_for_tile_containing(edge_id)?;
+            other_tile_graph_id = tile.graph_id();
+        }
+
+        let edge = tile.get_directed_edge(edge_id)?;
+        let end_node_id = edge.end_node_id();
+        if tile.may_contain_id(end_node_id) {
+            if let Some(result) = filter_node(&approximator, end_node_id, &tile, &node_filter_predicate, radius_squared) {
+                results.push(result);
+            }
+        } else {
+            deferred_node_lookups.push(end_node_id);
+        }
+
+        let opp_edge_index = tile.get_opp_edge_index(edge_id)?;
+        if opp_edge_index.end_node_id.tile_base_id() == other_tile_graph_id {
+            // Fast path: the opposing edge is also contained within the tile!
+            let opp_edge_id = provider.graph_id_for_opposing_edge_index(opp_edge_index, &tile)?;
+            let start_node_id = tile.get_directed_edge(opp_edge_id)?.end_node_id();
+            // The start node is also in this tile.
+            if tile.may_contain_id(start_node_id) {
+                if let Some(result) = filter_node(&approximator, start_node_id, &tile, &node_filter_predicate, radius_squared) {
+                    results.push(result);
+                }
+            } else {
+                deferred_node_lookups.push(start_node_id);
+            }
+        } else {
+            // TODO: Do something here?
+        }
+    }
+
+    // Sort and deduplicate node IDs to avoid processing the same node multiple times
+    // and to ensure cache-friendly access patterns.
+    deferred_node_lookups.sort_unstable();
+    deferred_node_lookups.dedup();
+
+    for node_id in deferred_node_lookups {
+        // Switch tiles if necessary.
+        if !tile.may_contain_id(node_id) {
+            tile = provider.get_handle_for_tile_containing(node_id)?;
+        }
+
+        if let Some(result) = filter_node(&approximator, node_id, &tile, &node_filter_predicate, radius_squared) {
+            results.push(result);
+        }
+    }
+
+    results.sort_unstable_by_key(|result| result.graph_id);
+    results.dedup_by_key(|result| result.graph_id);
+
+    Ok(results)
+}
+
+fn filter_node<
+    F,
+    N: CoordFloat + FromPrimitive,
+    T: GraphTile + Clone
+>(approximator: &DistanceApproximator<N>, node_id: GraphId, tile: &T, node_filter_predicate: F, radius_squared: N) -> Option<GraphSearchResult<NodeInfo, N, T>>
+    where
+    F: Fn(&NodeInfo) -> bool
+{
+    let node = tile.get_node(node_id).expect("Programming error: the tile passed to filter node MUST be known to contain the node.");
+
+    // Apply the filter predicate first.
+    if !node_filter_predicate(node) {
+        return None;
+    }
+
+    // Check distance.
+    let sw = tile.header().sw_corner();
+    let nc = node.coordinate(sw);
+    let nc_lon = N::from(nc.x).unwrap();
+    let nc_lat = N::from(nc.y).unwrap();
+    let sq_dist = approximator.distance_squared(coord! {x: nc_lon, y: nc_lat});
+
+    if sq_dist <= radius_squared {
+        Some(GraphSearchResult {
+            handle: tile.clone(),
+            graph_id: node_id,
+            approx_distance: sq_dist.sqrt(),
+            _marker: PhantomData,
+        })
+    } else {
+        None
     }
 }
 
