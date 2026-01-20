@@ -38,7 +38,7 @@ indicatif = "0.18.0"
 insta = { version = "1.40.0", features = ["yaml"] }
 integer-encoding = "4.1.0"
 itertools = "0.14.0"
-lru = "0.16.0"
+lru = "0.16.3"
 memmap2 = "0.9.9"
 num-traits = "0.2"
 num_enum = "0.7.5"
