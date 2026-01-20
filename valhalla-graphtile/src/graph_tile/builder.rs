@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use geo::Coord;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use zerocopy::{I16, Immutable, IntoBytes, LE, U32};
 
 /// The writer version.
@@ -96,6 +97,33 @@ pub struct GraphTileBuilder<'a> {
     predicted_speed_offsets: Cow<'a, [U32<LE>]>,
     /// Raw profile memory (`n_profiles x COEFFICIENT_COUNT` entries back to back)
     predicted_speed_profile_memory: Cow<'a, [I16<LE>]>,
+    /// Lazily initialized map for deduplicating speed profiles.
+    /// None = not yet initialized; Some = ready for use.
+    speed_profile_dedup: Option<HashMap<[i16; COEFFICIENT_COUNT], u32>>,
+}
+
+/// Builds a deduplication map from predicted speed profile memory.
+///
+/// Scans the flat profile memory (semantically a 2D array with fixed-width rows)
+/// and creates a HashMap mapping each unique profile to its offset.
+/// If duplicate profiles exist in the input, only the first occurrence is retained.
+fn build_speed_profile_dedup_map(memory: &[I16<LE>]) -> HashMap<[i16; COEFFICIENT_COUNT], u32> {
+    let mut map = HashMap::new();
+
+    for (chunk_idx, chunk) in memory.chunks_exact(COEFFICIENT_COUNT).enumerate() {
+        let offset = (chunk_idx * COEFFICIENT_COUNT) as u32;
+
+        // Convert the chunk to a native array for HashMap key
+        let mut profile = [0i16; COEFFICIENT_COUNT];
+        for (i, v) in chunk.iter().enumerate() {
+            profile[i] = v.get();
+        }
+
+        // Only insert if this profile hasn't been seen before
+        map.entry(profile).or_insert(offset);
+    }
+
+    map
 }
 
 impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
@@ -160,6 +188,7 @@ impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
             lane_connectivity_memory: Cow::Borrowed(lane_connectivity_memory),
             predicted_speed_offsets,
             predicted_speed_profile_memory,
+            speed_profile_dedup: None,
         }
     }
 }
@@ -249,18 +278,28 @@ impl GraphTileBuilder<'_> {
         let edge = &mut result.directed_edges.to_mut()[directed_edge_index];
         edge.set_has_predicted_speed(true);
 
-        // Add the correct offset into the profiles array.
-        // NOTE: Like Valhalla's built-in historical traffic tooling, we don't currently try to dedupe
-        // speed profiles. This just adds a new one, so we can assign the offset to the *current*
-        // (pre-insertion) length.
-        let predicted_speed_offsets = result.predicted_speed_offsets.to_mut();
-        predicted_speed_offsets[directed_edge_index] =
-            u32::try_from(result.predicted_speed_profile_memory.len())?.into();
+        // Lazy initialization: populate the dedup map from existing profiles if needed
+        let dedup_map = result.speed_profile_dedup.get_or_insert_with(|| {
+            build_speed_profile_dedup_map(&result.predicted_speed_profile_memory)
+        });
+        let offset = if let Some(&existing_offset) = dedup_map.get(coefficients) {
+            // Profile already exists; reuse the existing offset
+            existing_offset
+        } else {
+            // New profile; append it to the memory and record the offset
+            let new_offset = u32::try_from(result.predicted_speed_profile_memory.len())?;
 
-        // Add the predicted speeds after encoding them.
-        let predicted_speed_profiles = result.predicted_speed_profile_memory.to_mut();
-        predicted_speed_profiles
-            .extend::<[I16<LE>; COEFFICIENT_COUNT]>(coefficients.map(Into::into));
+            let predicted_speed_profiles = result.predicted_speed_profile_memory.to_mut();
+            predicted_speed_profiles
+                .extend::<[I16<LE>; COEFFICIENT_COUNT]>(coefficients.map(Into::into));
+
+            dedup_map.insert(*coefficients, new_offset);
+            new_offset
+        };
+
+        // Set the offset for this directed edge
+        let predicted_speed_offsets = result.predicted_speed_offsets.to_mut();
+        predicted_speed_offsets[directed_edge_index] = offset.into();
 
         Ok(result)
     }
@@ -624,6 +663,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::graph_tile::predicted_speeds::COEFFICIENT_COUNT;
     use crate::graph_tile::{GraphTileBuilder, GraphTileHeader, OwnedGraphTileHandle};
     use std::path::Path;
     use walkdir::WalkDir;
@@ -754,5 +794,80 @@ mod tests {
         }
 
         assert_eq!(out_bytes, expected_out_bytes);
+    }
+
+    #[test]
+    fn predicted_speeds_deduplication() {
+        let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("andorra-tiles");
+
+        let in_bytes = std::fs::read(base_dir.join("0").join("003").join("015.gph"))
+            .expect("Unable to read file");
+        let tile_handle =
+            OwnedGraphTileHandle::try_from(in_bytes.clone()).expect("Unable to get tile handle");
+
+        // Define two different speed profiles
+        let profile_a: [i16; COEFFICIENT_COUNT] = [1; 200];
+        let profile_b: [i16; COEFFICIENT_COUNT] = [2; 200];
+
+        // Add the same profile to multiple edges
+        let builder = GraphTileBuilder::from(&tile_handle)
+            .with_predicted_speed_coefficients(0, &profile_a)
+            .unwrap()
+            .with_predicted_speed_coefficients(1, &profile_a)
+            .unwrap() // Duplicate of edge 0
+            .with_predicted_speed_coefficients(2, &profile_b)
+            .unwrap()
+            .with_predicted_speed_coefficients(3, &profile_a)
+            .unwrap() // Duplicate of edge 0
+            .with_predicted_speed_coefficients(4, &profile_b)
+            .unwrap(); // Duplicate of edge 2
+
+        let out_bytes = builder.into_bytes().unwrap();
+        let out_handle =
+            OwnedGraphTileHandle::try_from(out_bytes).expect("Unable to get output tile handle");
+        let out_view = out_handle.borrow_dependent();
+
+        // Verify that we have predicted speeds
+        let predicted_speeds = out_view
+            .predicted_speeds
+            .as_ref()
+            .expect("Expected predicted speeds to be present");
+
+        // Verify that edges 0, 1, and 3 share the same offset (profile_a)
+        let (offsets, profiles) = predicted_speeds.as_offsets_and_profiles();
+
+        // We added 5 edges but only 2 unique profiles (profile_a and profile_b)
+        // So we should have exactly 2 profiles in memory
+        let profile_count = profiles.len() / COEFFICIENT_COUNT;
+        assert_eq!(
+            profile_count, 2,
+            "Expected exactly 2 unique speed profiles to be stored"
+        );
+        assert_eq!(
+            offsets[0].get(),
+            offsets[1].get(),
+            "Edges 0 and 1 should share the same speed profile offset"
+        );
+        assert_eq!(
+            offsets[0].get(),
+            offsets[3].get(),
+            "Edges 0 and 3 should share the same speed profile offset"
+        );
+
+        // Verify that edges 2 and 4 share the same offset (profile_b)
+        assert_eq!(
+            offsets[2].get(),
+            offsets[4].get(),
+            "Edges 2 and 4 should share the same speed profile offset"
+        );
+
+        // Verify that the two profiles have different offsets
+        assert_ne!(
+            offsets[0].get(),
+            offsets[2].get(),
+            "Edges 0 and 2 have different profiles, so they should have different offsets"
+        );
     }
 }
