@@ -167,9 +167,7 @@ impl<F: Fn(&NodeInfo) -> bool, P: GraphTileProvider, N: CoordFloat + FromPrimiti
                 self.buffer.extend(results);
                 self.next()
             }
-            Err(err) => {
-                Some(Err(err))
-            }
+            Err(err) => Some(Err(err)),
         }
     }
 }
@@ -224,11 +222,7 @@ impl<
 ///
 /// This function uses edge bins to prune the search space without iterating over every node in the tile
 /// (and in some cases, skipping tile levels entirely).
-fn nodes_within_radius<
-    P: GraphTileProvider,
-    F,
-    N: CoordFloat + FromPrimitive,
->(
+fn nodes_within_radius<P: GraphTileProvider, F, N: CoordFloat + FromPrimitive>(
     provider: &P,
     tile: P::TileHandle,
     node_filter_predicate: F,
@@ -259,7 +253,13 @@ where
 
             if tile.may_contain_id(end_node_id) {
                 // Fast path: node ends in the same tile
-                if let Some(result) = filter_node(&approximator, end_node_id, &tile, &node_filter_predicate, radius_squared) {
+                if let Some(result) = filter_node(
+                    &approximator,
+                    end_node_id,
+                    &tile,
+                    &node_filter_predicate,
+                    radius_squared,
+                ) {
                     results.push(result);
                 }
             } else {
@@ -271,11 +271,18 @@ where
             let opp_edge_index = tile.get_opp_edge_index(edge_id)?;
             if opp_edge_index.end_node_id.tile_base_id() == tile_graph_id {
                 // The opposing edge is contained within the tile
-                let opp_edge_id = provider.graph_id_for_opposing_edge_index(opp_edge_index, &tile)?;
+                let opp_edge_id =
+                    provider.graph_id_for_opposing_edge_index(opp_edge_index, &tile)?;
                 let start_node_id = tile.get_directed_edge(opp_edge_id)?.end_node_id();
                 if tile.may_contain_id(start_node_id) {
                     // Fast path: the start node is also contained within the tile
-                    if let Some(result) = filter_node(&approximator, start_node_id, &tile, &node_filter_predicate, radius_squared) {
+                    if let Some(result) = filter_node(
+                        &approximator,
+                        start_node_id,
+                        &tile,
+                        &node_filter_predicate,
+                        radius_squared,
+                    ) {
                         results.push(result);
                     }
                 } else {
@@ -307,7 +314,13 @@ where
         let edge = tile.get_directed_edge(edge_id)?;
         let end_node_id = edge.end_node_id();
         if tile.may_contain_id(end_node_id) {
-            if let Some(result) = filter_node(&approximator, end_node_id, &tile, &node_filter_predicate, radius_squared) {
+            if let Some(result) = filter_node(
+                &approximator,
+                end_node_id,
+                &tile,
+                &node_filter_predicate,
+                radius_squared,
+            ) {
                 results.push(result);
             }
         } else {
@@ -321,7 +334,13 @@ where
             let start_node_id = tile.get_directed_edge(opp_edge_id)?.end_node_id();
             // The start node is also in this tile.
             if tile.may_contain_id(start_node_id) {
-                if let Some(result) = filter_node(&approximator, start_node_id, &tile, &node_filter_predicate, radius_squared) {
+                if let Some(result) = filter_node(
+                    &approximator,
+                    start_node_id,
+                    &tile,
+                    &node_filter_predicate,
+                    radius_squared,
+                ) {
                     results.push(result);
                 }
             } else {
@@ -343,7 +362,13 @@ where
             tile = provider.get_handle_for_tile_containing(node_id)?;
         }
 
-        if let Some(result) = filter_node(&approximator, node_id, &tile, &node_filter_predicate, radius_squared) {
+        if let Some(result) = filter_node(
+            &approximator,
+            node_id,
+            &tile,
+            &node_filter_predicate,
+            radius_squared,
+        ) {
             results.push(result);
         }
     }
@@ -354,15 +379,19 @@ where
     Ok(results)
 }
 
-fn filter_node<
-    F,
-    N: CoordFloat + FromPrimitive,
-    T: GraphTile + Clone
->(approximator: &DistanceApproximator<N>, node_id: GraphId, tile: &T, node_filter_predicate: F, radius_squared: N) -> Option<GraphSearchResult<NodeInfo, N, T>>
-    where
-    F: Fn(&NodeInfo) -> bool
+fn filter_node<F, N: CoordFloat + FromPrimitive, T: GraphTile + Clone>(
+    approximator: &DistanceApproximator<N>,
+    node_id: GraphId,
+    tile: &T,
+    node_filter_predicate: F,
+    radius_squared: N,
+) -> Option<GraphSearchResult<NodeInfo, N, T>>
+where
+    F: Fn(&NodeInfo) -> bool,
 {
-    let node = tile.get_node(node_id).expect("Programming error: the tile passed to filter node MUST be known to contain the node.");
+    let node = tile.get_node(node_id).expect(
+        "Programming error: the tile passed to filter node MUST be known to contain the node.",
+    );
 
     // Apply the filter predicate first.
     if !node_filter_predicate(node) {
@@ -505,8 +534,7 @@ where
 
         let edge = tile.get_directed_edge(edge_id)?;
         if edge_filter_predicate(edge) {
-            if let Some(d) =
-                calculate_distance(&tile, edge, &approximator, query_point, radius)?
+            if let Some(d) = calculate_distance(&tile, edge, &approximator, query_point, radius)?
                 && d <= radius
             {
                 results.push(GraphSearchResult {

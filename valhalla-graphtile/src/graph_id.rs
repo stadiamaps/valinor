@@ -88,18 +88,7 @@ pub enum InvalidGraphIdError {
 ///
 /// Note that there are only 46 used bits in the scheme (ask Valhalla's authors why 46).
 #[repr(C)]
-#[derive(
-    IntoBytes,
-    Immutable,
-    Unaligned,
-    FromBytes,
-    Copy,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Hash,
-)]
+#[derive(IntoBytes, Immutable, Unaligned, FromBytes, Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct GraphId(U64<LE>);
 
 impl GraphId {
@@ -280,7 +269,7 @@ impl Ord for GraphId {
             other_level.cmp(&level)
         } else if tile_id != other_tile_id {
             // Same level, but different tile
-            return tile_id.cmp(&other_tile_id)
+            return tile_id.cmp(&other_tile_id);
         } else {
             // Same tile
             self.feature_index().cmp(&other.feature_index())
