@@ -157,6 +157,7 @@ pub fn decompress_speed_bucket(coefficients: &[i16; COEFFICIENT_COUNT], bucket_i
 
 /// Pack transformed speed values into a base64 string.
 /// Each i16 is serialized big-endian to match the C++.
+#[inline]
 pub fn encode_compressed_speeds(coefficients: &[i16; COEFFICIENT_COUNT]) -> String {
     // Exact-sized stack buffer; unfortunately also needs to be written out explicitly for now
     // to avoid a bunch of tiny extends on a vector
@@ -184,6 +185,56 @@ pub fn decode_base64_speed_coefficients(
         out[i] = i16::from_be_bytes([chunk[0], chunk[1]]);
     }
     Ok(out)
+}
+
+/// Computes an average speed profile from a set of compressed coefficients.
+///
+/// # Performance
+///
+/// This function should be reasonably fast, as there is no intermediate decode step.
+/// The averaging is applied directly in the DCT compressed domain.
+/// The generated code is vectorized on modern CPUs (verified using Compiler Explorer).
+///
+/// # Accuracy
+///
+/// The dominant source of error in Valhalla predicted traffic is the DCT-II compression itself,
+/// which lossily compresses 2016 speed buckets into 200 low-frequency coefficients and therefore
+/// smooths sharp or sudden changes.
+///
+/// This function does not introduce any additional structural loss beyond that compression.
+/// It computes the coefficient-space mean of the already-quantized profiles and performs a
+/// single final quantization step.
+///
+/// Compared to averaging fully decoded profiles and then recompressing them, this approach
+/// is at least as accurate and typically more accurate, since it avoids an extra
+/// compress–decompress cycle.
+///
+/// The only additional error introduced here is due to integer division when computing the
+/// mean coefficient values; this is bounded to less than 1 least-significant unit per coefficient.
+/// In practice, this translates to sub-kph differences in reconstructed speeds.
+pub fn average_compressed_speeds(speeds: &[[i16; COEFFICIENT_COUNT]]) -> [i16; COEFFICIENT_COUNT] {
+    debug_assert!(
+        speeds.len() < usize::from(u16::MAX),
+        "Are you SURE you want to average more than 65,535 profiles? This method doesn't currently support that."
+    );
+    let mut result = [0i32; COEFFICIENT_COUNT];
+
+    // Sum all speed arrays elementwise
+    for speed_array in speeds {
+        for i in 0..COEFFICIENT_COUNT {
+            result[i] += i32::from(speed_array[i]);
+        }
+    }
+
+    // Divide by count and convert back to i16
+    let count = speeds.len() as i32;
+    let mut output = [0i16; COEFFICIENT_COUNT];
+
+    for i in 0..COEFFICIENT_COUNT {
+        output[i] = (result[i] / count) as i16;
+    }
+
+    output
 }
 
 /// Safe accessor for predicted speed profiles stored in a tile-like blob.
@@ -299,6 +350,62 @@ mod tests {
             for (i, &s) in recon.iter().enumerate() {
                 // These can be preeeety negative...
                 prop_assert!(s >= -5.0, "negative speed at bucket {i}: {s}");
+            }
+        }
+
+        #[test]
+        fn prop_averaging_in_compressed_domain_white_noise(
+            speeds1 in proptest::collection::vec(1.0f32..250.0f32, BUCKETS_PER_WEEK),
+            speeds2 in proptest::collection::vec(1.0f32..250.0f32, BUCKETS_PER_WEEK),
+            speeds3 in proptest::collection::vec(1.0f32..250.0f32, BUCKETS_PER_WEEK)
+        ) {
+            // Convert Vec -> array
+            let speeds1: [f32; BUCKETS_PER_WEEK] = speeds1.try_into().expect("exact length");
+            let speeds2: [f32; BUCKETS_PER_WEEK] = speeds2.try_into().expect("exact length");
+            let speeds3: [f32; BUCKETS_PER_WEEK] = speeds3.try_into().expect("exact length");
+
+            // Compress all three profiles
+            let coeffs1 = compress_speed_buckets(&speeds1);
+            let coeffs2 = compress_speed_buckets(&speeds2);
+            let coeffs3 = compress_speed_buckets(&speeds3);
+
+            // Method 1: Decompress first; then average the decompressed speeds
+            // NB: Since our test contains essentially random speeds, we can't accurately compare
+            // with the true average, since the compresion is so lossy.
+            // This approach tests the actual property which is "if we decompressed the speeds
+            // and then averaged those values, is that the same as averaging the coefficients directly."
+            let mut b1 = [0.0f32; BUCKETS_PER_WEEK];
+            let mut b2 = [0.0f32; BUCKETS_PER_WEEK];
+            let mut b3 = [0.0f32; BUCKETS_PER_WEEK];
+            for i in 0..BUCKETS_PER_WEEK {
+                b1[i] = decompress_speed_bucket(&coeffs1, i);
+                b2[i] = decompress_speed_bucket(&coeffs2, i);
+                b3[i] = decompress_speed_bucket(&coeffs3, i);
+            }
+
+            let mut avg_buckets_direct = [0.0f32; BUCKETS_PER_WEEK];
+            for i in 0..BUCKETS_PER_WEEK {
+                avg_buckets_direct[i] = (b1[i] + b2[i] + b3[i]) / 3.0;
+            }
+
+            // Method 2: Average directly in the compressed domain using the average_compressed_speeds function
+            let avg_coeffs = average_compressed_speeds(&[coeffs1, coeffs2, coeffs3]);
+
+            // Decompress the averaged coefficients
+            let mut avg_buckets_compressed = [0f32; BUCKETS_PER_WEEK];
+            for i in 0..BUCKETS_PER_WEEK {
+                avg_buckets_compressed[i] = decompress_speed_bucket(&avg_coeffs, i);
+            }
+
+            for i in 0..BUCKETS_PER_WEEK {
+                let diff = (avg_buckets_direct[i] - avg_buckets_compressed[i]).abs();
+                prop_assert!(
+                    diff <= 1.0,
+                    "Bucket {i}: direct average = {}, compressed average = {}, diff = {}",
+                    avg_buckets_direct[i],
+                    avg_buckets_compressed[i],
+                    diff
+                );
             }
         }
 

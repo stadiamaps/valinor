@@ -51,9 +51,9 @@ Please review https://github.com/valinor/blob/main/AGENTS.md#for-humans. In part
 
 - Use inline comments to explain "why," not just "what".
 - Module-level documentation should explain purpose and responsibilities.
-- **Always** use periods at the end of code comments.
 - **Never** use title case in headings and titles. Always use sentence case.
 - Always use the Oxford comma.
+- Use [Semantic Line Breaks](https://sembr.org/) when writing comments. We prefer lines less than 100 characters, but this is not a hard rule.
 
 ## Code style
 
