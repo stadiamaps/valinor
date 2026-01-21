@@ -409,6 +409,27 @@ mod tests {
             }
         }
 
+        /// For a single speed profile, averaging should be a no-op (round-trip unchanged).
+        #[test]
+        fn prop_average_single_profile_unchanged(
+            speeds in proptest::collection::vec(0.0f32..250.0f32, BUCKETS_PER_WEEK)
+        ) {
+            // Convert Vec -> array
+            let speeds: [f32; BUCKETS_PER_WEEK] = speeds.try_into().expect("exact length");
+
+            // Compress the profile
+            let coeffs = compress_speed_buckets(&speeds);
+
+            // Average a single profile
+            let avg_coeffs = average_compressed_speeds(&[coeffs]);
+
+            // The averaged coefficients should be identical to the original
+            prop_assert!(
+                coeffs == avg_coeffs,
+                "Averaging a single speed profile should return the same coefficients"
+            );
+        }
+
         /// For smooth, low-frequency weekly profiles, the round-trip error should be small.
         /// This mirrors the C++ deterministic test thresholds.
         #[test]
@@ -557,6 +578,52 @@ mod tests {
         29, 30, 30, 29, 29, 28, 27, 25, 24, 23, 22, 22, 21, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31,
         31, 32, 32, 32, 32, 31, 31, 30, 30, 30, 29,
     ];
+
+    #[test]
+    fn averaging_realistic_speed_profiles() {
+        // Use the existing realistic speed profile as a base
+        let base_speeds: [f32; BUCKETS_PER_WEEK] = SPEEDS.map(|s| s as f32);
+
+        // Create two additional profiles with small realistic variations
+        // Profile 1: slightly faster (5% increase)
+        let speeds1: [f32; BUCKETS_PER_WEEK] = base_speeds.map(|s| s * 1.05);
+
+        // Profile 2: slightly slower (5% decrease)
+        let speeds2: [f32; BUCKETS_PER_WEEK] = base_speeds.map(|s| s * 0.95);
+
+        // The true average should be the base profile
+        let true_average = base_speeds;
+
+        // Compress all three profiles
+        let coeffs_base = compress_speed_buckets(&base_speeds);
+        let coeffs1 = compress_speed_buckets(&speeds1);
+        let coeffs2 = compress_speed_buckets(&speeds2);
+
+        // Average in the compressed domain
+        let avg_coeffs = average_compressed_speeds(&[coeffs_base, coeffs1, coeffs2]);
+
+        // Decompress the averaged coefficients
+        let mut avg_speeds = [0f32; BUCKETS_PER_WEEK];
+        for i in 0..BUCKETS_PER_WEEK {
+            avg_speeds[i] = decompress_speed_bucket(&avg_coeffs, i);
+        }
+
+        // Compare with true average
+        let mut max_error = 0.0f32;
+
+        for i in 0..BUCKETS_PER_WEEK {
+            let error = (avg_speeds[i] - true_average[i]).abs();
+            max_error = max_error.max(error);
+        }
+
+        // The error should be quite small for realistic profiles
+        // Even though we're averaging in the compressed domain, the smooth nature
+        // of the profiles means the DCT compression doesn't introduce much error
+        assert!(
+            max_error <= 1.0,
+            "Max error is larger than expected: {max_error} kph"
+        );
+    }
 
     // TODO: Make these two prop tests
 
