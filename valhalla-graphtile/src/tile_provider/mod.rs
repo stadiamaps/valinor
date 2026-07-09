@@ -26,7 +26,10 @@ use crate::graph_tile::{
 pub use directory::DirectoryGraphTileProvider;
 pub use iterators::GraphSearchResult;
 use iterators::ResultsWithinRadius;
-pub use tarball::TarballTileProvider;
+pub use tarball::{
+    InvalidIndexBinError, TarballTileProvider, TileIndexBinEntry, parse_index_bin,
+    serialize_index_bin,
+};
 pub use traffic::TrafficTileProvider;
 
 #[derive(Debug, Error)]
@@ -47,6 +50,8 @@ pub enum GraphTileProviderError {
     PoisonedCacheLock(String),
     #[error("Invalid tarball: {0}")]
     InvalidTarball(String),
+    #[error("invalid index.bin: {0}")]
+    InvalidIndexBin(#[from] InvalidIndexBinError),
     #[error("Unsupported tile version; this may or may not be compatible.")]
     UnsupportedTileVersion,
 }

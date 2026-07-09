@@ -16,7 +16,8 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use tar::Archive;
-use zerocopy::{FromBytes, LE, U32, U64};
+use thiserror::Error;
+use zerocopy::{FromBytes, IntoBytes, LE, U32, U64};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, Unaligned};
 
 /// A tile provider backed by a memory-mapped tarball archive.
@@ -127,15 +128,7 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         let mut tile_index: HashMap<GraphId, TileOffset> =
             HashMap::with_capacity(index_entries.len());
         for entry in index_entries {
-            let graph_id = entry.graph_id()?;
-            let offset = entry.offset.get();
-            if offset == 0 || !offset.is_multiple_of(512) {
-                return Err(GraphTileProviderError::InvalidTarball(format!(
-                    "Expected all index offsets to lie on a 512-byte boundary, but the index entry for {} has offset {}",
-                    graph_id, offset,
-                )));
-            }
-
+            let (graph_id, offset) = entry.validated()?;
             tile_index.insert(
                 graph_id,
                 TileOffset {
@@ -425,7 +418,7 @@ impl TarballTileProvider<true, false> {
 ///
 /// The `index.bin` file is just a series of these structs written out sequentially;
 /// no padding or headers, just bytes.
-#[derive(FromBytes, IntoBytes, Immutable, Unaligned, PartialEq)]
+#[derive(FromBytes, IntoBytes, Immutable, Unaligned, Debug, PartialEq)]
 #[repr(C)]
 pub struct TileIndexBinEntry {
     /// Byte offset from the beginning of the tar
@@ -436,51 +429,145 @@ pub struct TileIndexBinEntry {
     size: U32<LE>,
 }
 
+/// The size of one [`TileIndexBinEntry`] in bytes.
+const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
+
+/// The block size of a tar archive.
+/// The data of each tar entry starts on a block boundary.
+const TAR_BLOCK_SIZE: u64 = 512;
+
+/// The reasons why an `index.bin` file or one of its entries is not valid.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum InvalidIndexBinError {
+    #[error("the index has no entries")]
+    Empty,
+    #[error(
+        "the index length ({0} bytes) is not a multiple of the entry size ({INDEX_ENTRY_SIZE} bytes)"
+    )]
+    Length(usize),
+    #[error("{0} is not a base tile ID; expected the feature index to be zero")]
+    FeatureIndex(GraphId),
+    #[error("graph ID {0} has reserved bits set")]
+    ReservedBits(u64),
+    #[error(
+        "the entry for {graph_id} has offset {offset}; expected a non-zero multiple of {TAR_BLOCK_SIZE}"
+    )]
+    Offset { graph_id: GraphId, offset: u64 },
+}
+
 impl TileIndexBinEntry {
-    fn graph_id(&self) -> Result<GraphId, GraphTileProviderError> {
+    /// Creates an index entry for a tile located at the given byte offset within a tarball.
+    ///
+    /// # Errors
+    ///
+    /// This will fail if `graph_id` is not a base tile ID
+    /// (the feature index and reserved bits must be zero),
+    /// or if `offset` is zero or does not lie on a 512-byte boundary
+    /// (tar entry data is always aligned to 512-byte blocks).
+    pub fn new(graph_id: GraphId, offset: u64, size: u32) -> Result<Self, InvalidIndexBinError> {
+        let tile_id = base_tile_id(graph_id)?;
+        check_offset(graph_id, offset)?;
+
+        Ok(Self {
+            offset: U64::new(offset),
+            tile_id: U32::new(tile_id),
+            size: U32::new(size),
+        })
+    }
+
+    /// Validates a parsed entry, and returns its graph ID and offset.
+    ///
+    /// [`parse_index_bin`] does not examine the entry values,
+    /// so the read path must call this before it uses an entry.
+    /// The checks are the same as in [`TileIndexBinEntry::new`].
+    fn validated(&self) -> Result<(GraphId, u64), InvalidIndexBinError> {
+        let graph_id = self.graph_id()?;
+        let offset = self.offset.get();
+        check_offset(graph_id, offset)?;
+
+        Ok((graph_id, offset))
+    }
+
+    fn graph_id(&self) -> Result<GraphId, InvalidIndexBinError> {
         // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
         // Therefore, this is guaranteed to be a valid Graph ID bit pattern.
         let graph_id = unsafe { GraphId::from_id_unchecked(self.tile_id.into()) };
+        base_tile_id(graph_id)?;
 
-        if graph_id.feature_index() == 0 {
-            Ok(graph_id)
-        } else {
-            Err(GraphTileProviderError::InvalidTarball(format!(
-                "Invalid GraphID {}; expected the index bits to be zero.",
-                self.tile_id.get()
-            )))
-        }
+        Ok(graph_id)
     }
+}
+
+/// Makes sure that `graph_id` identifies a full tile,
+/// and returns the packed level and tile ID that `index.bin` stores.
+fn base_tile_id(graph_id: GraphId) -> Result<u32, InvalidIndexBinError> {
+    if graph_id.feature_index() != 0 {
+        return Err(InvalidIndexBinError::FeatureIndex(graph_id));
+    }
+
+    // A base tile ID packs the level and tile ID into the low 25 bits,
+    // so this conversion only fails for IDs with reserved bits set
+    // (such IDs can only be produced by the unchecked GraphId constructors).
+    u32::try_from(graph_id.value())
+        .map_err(|_| InvalidIndexBinError::ReservedBits(graph_id.value()))
+}
+
+/// Makes sure that `offset` can be the start of the data of a tar entry.
+///
+/// A tar entry starts with a 512-byte header, so its data cannot be at offset zero.
+fn check_offset(graph_id: GraphId, offset: u64) -> Result<(), InvalidIndexBinError> {
+    if offset == 0 || !offset.is_multiple_of(TAR_BLOCK_SIZE) {
+        return Err(InvalidIndexBinError::Offset { graph_id, offset });
+    }
+
+    Ok(())
 }
 
 /// Parses an `index.bin` file to enable random access.
 ///
 /// See [`TileIndexBinEntry`] for a description of the tile format.
-pub fn parse_index_bin(index_bytes: &[u8]) -> Result<&[TileIndexBinEntry], GraphTileProviderError> {
-    const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
-
-    if index_bytes.is_empty() || !index_bytes.len().is_multiple_of(INDEX_ENTRY_SIZE) {
-        return Err(GraphTileProviderError::InvalidTarball(format!(
-            "Malformed index.bin: expected length to be non-zero and a multiple of {INDEX_ENTRY_SIZE}; was {}",
-            index_bytes.len()
-        )));
+/// This function only checks the length of the input.
+/// It does not validate the values in the entries.
+///
+/// # Errors
+///
+/// The input must be non-zero in length and consist of a whole number of entries;
+/// anything else fails with an [`InvalidIndexBinError`].
+pub fn parse_index_bin(index_bytes: &[u8]) -> Result<&[TileIndexBinEntry], InvalidIndexBinError> {
+    if index_bytes.is_empty() {
+        return Err(InvalidIndexBinError::Empty);
     }
 
-    // Decode the index as a sequence of TileIndexEntry
-    let num_tiles = index_bytes.len() / INDEX_ENTRY_SIZE;
+    // The entry type is unaligned,
+    // so the only possible failure is a length that is not a whole number of entries.
+    <[TileIndexBinEntry]>::ref_from_bytes(index_bytes)
+        .map_err(|_| InvalidIndexBinError::Length(index_bytes.len()))
+}
 
-    let (index_entries, tail) =
-        <[TileIndexBinEntry]>::ref_from_prefix_with_elems(index_bytes, num_tiles).map_err(|e| {
-            GraphTileProviderError::InvalidTarball(format!("Malformed index.bin: {e:?}"))
-        })?;
+/// Serializes tile index entries into the bytes of an `index.bin` file.
+///
+/// This is the write-side twin of [`parse_index_bin`]:
+/// the entries are written out sequentially with no padding or headers
+/// (see [`TileIndexBinEntry`] for a description of the file format).
+/// Bytes returned by this function always parse back into the same entries.
+///
+/// # Performance
+///
+/// The entries already have the exact memory layout of the file format,
+/// so this is a zero-copy transmutation of the slice.
+///
+/// # Errors
+///
+/// An index without any entries is malformed
+/// (an extract containing no tiles is meaningless, and [`parse_index_bin`] rejects it),
+/// so serializing an empty slice fails with [`InvalidIndexBinError::Empty`].
+pub fn serialize_index_bin(entries: &[TileIndexBinEntry]) -> Result<&[u8], InvalidIndexBinError> {
+    if entries.is_empty() {
+        return Err(InvalidIndexBinError::Empty);
+    }
 
-    assert!(
-        tail.is_empty(),
-        "Expected no remaining bytes after parsing the index. This is a programming error in Valinor, not your code. Please report an issue."
-    );
-
-    Ok(index_entries)
+    Ok(entries.as_bytes())
 }
 
 #[cfg(test)]
@@ -488,6 +575,8 @@ mod test {
     use super::*;
     use crate::graph_tile::{GraphTile, GraphTileView};
     use crate::tile_provider::DirectoryGraphTileProvider;
+    use proptest::collection::vec;
+    use proptest::{prop_assert, prop_assert_eq, proptest};
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
 
@@ -504,30 +593,71 @@ mod test {
 
     #[test]
     fn test_parse_index_bin_invalid() {
-        assert!(
-            matches!(
-                parse_index_bin(&[]),
-                Err(GraphTileProviderError::InvalidTarball(_))
-            ),
+        assert_eq!(
+            parse_index_bin(&[]),
+            Err(InvalidIndexBinError::Empty),
             "Empty indexes are invalid"
         );
-        assert!(
-            matches!(
-                parse_index_bin(&[0x00, 0x5a]),
-                Err(GraphTileProviderError::InvalidTarball(_)),
-            ),
+        assert_eq!(
+            parse_index_bin(&[0x00, 0x5a]),
+            Err(InvalidIndexBinError::Length(2)),
             "Index must contain at least one full entry"
         );
-        assert!(
-            matches!(
-                parse_index_bin(&[
-                    // Contains one extra byte
-                    0x00, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x4f, 0x00, 0x00, 0x9c,
-                    0x08, 0x12, 0x00, 0x00
-                ]),
-                Err(GraphTileProviderError::InvalidTarball(_)),
-            ),
+        assert_eq!(
+            parse_index_bin(&[
+                // Contains one extra byte
+                0x00, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x4f, 0x00, 0x00, 0x9c, 0x08,
+                0x12, 0x00, 0x00
+            ]),
+            Err(InvalidIndexBinError::Length(17)),
             "Index must be completely parseable with no bytes leftover"
+        );
+    }
+
+    #[test]
+    fn test_validate_parsed_entry() {
+        let graph_id = GraphId::try_from_components(0, 2540, 0).expect("Unable to create graph ID");
+        let index_entries = parse_index_bin(INDEX_BIN_FIXTURE).expect("Unable to parse fixture");
+        assert_eq!(index_entries[0].validated(), Ok((graph_id, 23040)));
+
+        // Change the low byte of the first offset (23040 = 0x5a00) to make it unaligned
+        let mut bytes = INDEX_BIN_FIXTURE.to_vec();
+        bytes[0] = 0x01;
+        let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
+        assert_eq!(
+            index_entries[0].validated(),
+            Err(InvalidIndexBinError::Offset {
+                graph_id,
+                offset: 23041
+            }),
+            "Offsets must lie on a 512-byte boundary"
+        );
+
+        // Zero the first offset
+        let mut bytes = INDEX_BIN_FIXTURE.to_vec();
+        bytes[..8].fill(0);
+        let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
+        assert_eq!(
+            index_entries[0].validated(),
+            Err(InvalidIndexBinError::Offset {
+                graph_id,
+                offset: 0
+            }),
+            "Zero offsets are invalid"
+        );
+
+        // Set bit 25 of the first tile ID (the lowest bit of the feature index)
+        let mut bytes = INDEX_BIN_FIXTURE.to_vec();
+        bytes[11] |= 0x02;
+        let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
+        assert_eq!(
+            index_entries[0].validated(),
+            Err(InvalidIndexBinError::FeatureIndex(
+                graph_id
+                    .with_feature_index(1)
+                    .expect("Unable to create graph ID")
+            )),
+            "Graph IDs with a non-zero feature index are invalid"
         );
     }
 
@@ -559,6 +689,115 @@ mod test {
             GraphId::from_components_unchecked(0, 2629, 0)
         });
         assert_eq!(index_entries[2].size.get(), 1_809_704);
+    }
+
+    #[test]
+    fn test_tile_index_bin_entry_new() {
+        let graph_id = GraphId::try_from_components(0, 2540, 0).expect("Unable to create graph ID");
+        let entry = TileIndexBinEntry::new(graph_id, 23040, 1_181_852)
+            .expect("Unable to create index entry");
+
+        assert_eq!(entry.offset.get(), 23040);
+        assert_eq!(entry.graph_id().unwrap(), graph_id);
+        assert_eq!(entry.size.get(), 1_181_852);
+    }
+
+    #[test]
+    fn test_tile_index_bin_entry_new_invalid() {
+        let graph_id = GraphId::try_from_components(0, 2540, 0).expect("Unable to create graph ID");
+
+        let feature_id = graph_id
+            .with_feature_index(1)
+            .expect("Unable to create graph ID");
+        assert_eq!(
+            TileIndexBinEntry::new(feature_id, 512, 42),
+            Err(InvalidIndexBinError::FeatureIndex(feature_id)),
+            "Graph IDs with a non-zero feature index are invalid"
+        );
+
+        // Only constructible via the unchecked APIs,
+        // but the constructor still shouldn't let it through silently.
+        // SAFETY: The test does not use this ID to index into a tile.
+        // It only gives the ID to the constructor, which must reject it.
+        let reserved_id = unsafe { GraphId::from_id_unchecked(U64::new(1 << 46)) };
+        assert_eq!(
+            TileIndexBinEntry::new(reserved_id, 512, 42),
+            Err(InvalidIndexBinError::ReservedBits(1 << 46)),
+            "Graph IDs with reserved bits set are invalid"
+        );
+
+        for offset in [0, 256, 23041] {
+            assert_eq!(
+                TileIndexBinEntry::new(graph_id, offset, 42),
+                Err(InvalidIndexBinError::Offset { graph_id, offset }),
+                "Offsets must be non-zero and lie on a 512-byte boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_serialize_index_bin_empty() {
+        assert_eq!(
+            serialize_index_bin(&[]),
+            Err(InvalidIndexBinError::Empty),
+            "Empty indexes are invalid"
+        );
+    }
+
+    #[test]
+    fn test_serialize_index_bin() {
+        // The same three entries as in the fixture (see test_parse_index_bin)
+        let entries = [
+            TileIndexBinEntry::new(
+                GraphId::try_from_components(0, 2540, 0).expect("Unable to create graph ID"),
+                23040,
+                1_181_852,
+            )
+            .expect("Unable to create index entry"),
+            TileIndexBinEntry::new(
+                GraphId::try_from_components(0, 2628, 0).expect("Unable to create graph ID"),
+                1_206_784,
+                92_104,
+            )
+            .expect("Unable to create index entry"),
+            TileIndexBinEntry::new(
+                GraphId::try_from_components(0, 2629, 0).expect("Unable to create graph ID"),
+                1_300_480,
+                1_809_704,
+            )
+            .expect("Unable to create index entry"),
+        ];
+
+        let bytes = serialize_index_bin(&entries).expect("Unable to serialize index entries");
+
+        assert_eq!(bytes, INDEX_BIN_FIXTURE);
+    }
+
+    proptest! {
+        #[test]
+        fn test_index_bin_roundtrip(
+            // Levels are 3 bits, tile IDs are 22 bits, and offsets are counted in 512-byte blocks
+            raw_entries in vec((0u8..=7, 0u64..1 << 22, 1u64..=u64::MAX / 512, 0u32..=u32::MAX), 1..64)
+        ) {
+            let entries: Vec<TileIndexBinEntry> = raw_entries
+                .into_iter()
+                .map(|(level, tile_id, offset_block, size)| {
+                    let graph_id = GraphId::try_from_components(level, tile_id, 0)
+                        .expect("All components are within their field limits");
+                    TileIndexBinEntry::new(graph_id, offset_block * 512, size)
+                        .expect("Offsets are non-zero and 512-aligned by construction")
+                })
+                .collect();
+
+            let bytes = serialize_index_bin(&entries).expect("The entry list is non-empty");
+            let parsed = parse_index_bin(bytes).expect("Serialized bytes always parse");
+
+            prop_assert_eq!(parsed, entries.as_slice());
+            // The read path accepts every entry that the write path creates
+            for entry in parsed {
+                prop_assert!(entry.validated().is_ok());
+            }
+        }
     }
 
     // Tragically, memory maps are not supported by Miri!
