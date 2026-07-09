@@ -175,6 +175,18 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
     pub fn tile_ids(&self) -> impl Iterator<Item = &GraphId> {
         self.tile_index.keys()
     }
+
+    /// The size in bytes of the tile containing this graph ID,
+    /// or [`None`] if the tile is not part of the tarball archive.
+    ///
+    /// The size comes straight from the tarball's `index.bin`,
+    /// so no tile data is accessed.
+    #[inline]
+    pub fn tile_size(&self, graph_id: GraphId) -> Option<u32> {
+        self.tile_index
+            .get(&graph_id.tile_base_id())
+            .map(|tile_offset| tile_offset.size)
+    }
 }
 
 impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, false> {
@@ -488,7 +500,13 @@ impl TileIndexBinEntry {
         Ok((graph_id, offset))
     }
 
-    fn graph_id(&self) -> Result<GraphId, InvalidIndexBinError> {
+    /// The graph ID of the indexed tile.
+    ///
+    /// # Errors
+    ///
+    /// Entries parsed from a foreign `index.bin` may contain arbitrary bit patterns,
+    /// so this fails if the stored tile ID has non-zero feature index bits.
+    pub fn graph_id(&self) -> Result<GraphId, InvalidIndexBinError> {
         // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
         // Therefore, this is guaranteed to be a valid Graph ID bit pattern.
@@ -496,6 +514,18 @@ impl TileIndexBinEntry {
         base_tile_id(graph_id)?;
 
         Ok(graph_id)
+    }
+
+    /// The byte offset of the tile payload from the beginning of the tarball.
+    #[inline]
+    pub fn offset(&self) -> u64 {
+        self.offset.get()
+    }
+
+    /// The size of the tile in bytes.
+    #[inline]
+    pub fn size(&self) -> u32 {
+        self.size.get()
     }
 }
 
