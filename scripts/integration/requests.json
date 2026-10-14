@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "Fixed request set for the integration tests with C++ Valhalla.",
+    "All coordinates are well inside the tiles of the integration sub-extract",
+    "(see sub-extract-tiles.txt),",
+    "so the optimal route never depends on tiles absent from the sub-extract.",
+    "Costings vary deliberately (auto, bicycle, pedestrian) to exercise",
+    "different access masks and speed sources."
+  ],
+  "routes": [
+    {
+      "name": "andorra-la-vella-to-encamp-auto",
+      "request": {
+        "locations": [
+          { "lat": 42.5063, "lon": 1.5218 },
+          { "lat": 42.536, "lon": 1.5836 }
+        ],
+        "costing": "auto",
+        "units": "kilometers"
+      }
+    },
+    {
+      "name": "andorra-la-vella-to-la-massana-auto",
+      "request": {
+        "locations": [
+          { "lat": 42.5078, "lon": 1.5211 },
+          { "lat": 42.5449, "lon": 1.5148 }
+        ],
+        "costing": "auto",
+        "units": "kilometers"
+      }
+    },
+    {
+      "name": "encamp-to-canillo-auto",
+      "request": {
+        "locations": [
+          { "lat": 42.536, "lon": 1.5836 },
+          { "lat": 42.5676, "lon": 1.5976 }
+        ],
+        "costing": "auto",
+        "units": "kilometers"
+      }
+    },
+    {
+      "name": "ordino-to-la-massana-bicycle",
+      "request": {
+        "locations": [
+          { "lat": 42.5562, "lon": 1.5332 },
+          { "lat": 42.5449, "lon": 1.5148 }
+        ],
+        "costing": "bicycle",
+        "units": "kilometers"
+      }
+    },
+    {
+      "name": "andorra-la-vella-center-pedestrian",
+      "request": {
+        "locations": [
+          { "lat": 42.5063, "lon": 1.5218 },
+          { "lat": 42.5103, "lon": 1.5336 }
+        ],
+        "costing": "pedestrian",
+        "units": "kilometers"
+      }
+    }
+  ],
+  "locate": {
+    "_comment": "Interior point in central Andorra la Vella.",
+    "request": {
+      "locations": [{ "lat": 42.5063, "lon": 1.5218 }],
+      "costing": "auto",
+      "verbose": true
+    }
+  }
+}

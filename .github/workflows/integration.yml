@@ -1,0 +1,47 @@
+# Integration tests of offline tile extracts with C++ Valhalla.
+# Writes a sub-extract of the Andorra fixture with `valinor-cli extract`,
+# serves it with a stock C++ Valhalla Docker image pinned BY DIGEST
+# (scripts/integration/valhalla-image.txt is the single pinning point),
+# and makes sure that it behaves the same as the full fixture.
+name: Integration
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "valhalla-graphtile/src/extract/**"
+      # The tar layout and index.bin serialization consumed by stock Valhalla
+      # live in the tile providers, not only in the extract pipeline.
+      - "valhalla-graphtile/src/tile_provider/**"
+      - "valinor-cli/**"
+      - "scripts/integration/**"
+      - ".github/workflows/integration.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration:
+    # Linux only: the job exercises the Docker image, not platform behavior
+    # (the cross-platform matrix lives in rust.yml).
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Run the integration tests with C++ Valhalla
+      # The script writes the sub-extract with valinor-cli
+      # (see scripts/integration/sub-extract-tiles.txt),
+      # and puts its work files in target/integration.
+      run: scripts/integration/run_integration.sh
+
+    - name: Upload harness artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-workdir
+        path: |
+          target/integration/responses-*
+          target/integration/valhalla-*.log
+          target/integration/data-*/valhalla.json
