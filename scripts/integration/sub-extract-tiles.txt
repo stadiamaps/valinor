@@ -1,0 +1,14 @@
+# The tiles of the integration sub-extract, one level/tile_index per line.
+# run_integration.sh gives these to `valinor-cli extract --tile`.
+#
+# The list contains every tile of the Andorra fixture except the north-east corner
+# (2/763927: longitude 1.75 to 2.0, latitude 42.5 to 42.75),
+# so the sub-extract is a proper subset of the fixture.
+# All requests.json coordinates are far from the removed tile.
+# If you change this list, make sure that the requests stay inside the remaining tiles.
+0/3015
+1/47701
+2/762485
+2/762486
+2/763925
+2/763926

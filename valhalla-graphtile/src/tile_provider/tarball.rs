@@ -102,7 +102,11 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
             );
         }
 
-        let mut archive = Archive::new(File::open(&path)?);
+        let archive_file = File::open(&path)?;
+        // Get the length before the index is read,
+        // so that every index entry can be checked against it in a single pass.
+        let archive_len = archive_file.metadata()?.len();
+        let mut archive = Archive::new(archive_file);
         let mut entries = archive.entries()?;
 
         let Some(entry) = entries.next() else {
@@ -128,7 +132,7 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         let mut tile_index: HashMap<GraphId, TileOffset> =
             HashMap::with_capacity(index_entries.len());
         for entry in index_entries {
-            let (graph_id, offset) = entry.validated()?;
+            let (graph_id, offset) = entry.validated(archive_len)?;
             tile_index.insert(
                 graph_id,
                 TileOffset {
@@ -148,6 +152,16 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         } else {
             Arc::new(MmapOptions::new().map_raw_read_only(&file)?)
         };
+
+        // Tile pointers turn index ranges into slices without a bounds check.
+        // The index ranges were checked against `archive_len`,
+        // so the memory map must have exactly that length.
+        if mmap.len() as u64 != archive_len {
+            return Err(GraphTileProviderError::InvalidTarball(format!(
+                "the archive changed size while it was opened ({archive_len} bytes, then {} bytes)",
+                mmap.len()
+            )));
+        }
 
         let mut tile_cache = HashMap::new();
 
@@ -174,6 +188,18 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
     /// An iterator over all tile IDs contained in the tarball, in arbitrary order.
     pub fn tile_ids(&self) -> impl Iterator<Item = &GraphId> {
         self.tile_index.keys()
+    }
+
+    /// The size in bytes of the tile containing this graph ID,
+    /// or [`None`] if the tile is not part of the tarball archive.
+    ///
+    /// The size comes straight from the tarball's `index.bin`,
+    /// so no tile data is accessed.
+    #[inline]
+    pub fn tile_size(&self, graph_id: GraphId) -> Option<u32> {
+        self.tile_index
+            .get(&graph_id.tile_base_id())
+            .map(|tile_offset| tile_offset.size)
     }
 }
 
@@ -453,6 +479,15 @@ pub enum InvalidIndexBinError {
         "the entry for {graph_id} has offset {offset}; expected a non-zero multiple of {TAR_BLOCK_SIZE}"
     )]
     Offset { graph_id: GraphId, offset: u64 },
+    #[error(
+        "the entry for {graph_id} has {size} bytes at offset {offset}, which is past the end of the {archive_len}-byte archive"
+    )]
+    OutOfBounds {
+        graph_id: GraphId,
+        offset: u64,
+        size: u32,
+        archive_len: u64,
+    },
 }
 
 impl TileIndexBinEntry {
@@ -479,16 +514,24 @@ impl TileIndexBinEntry {
     ///
     /// [`parse_index_bin`] does not examine the entry values,
     /// so the read path must call this before it uses an entry.
-    /// The checks are the same as in [`TileIndexBinEntry::new`].
-    fn validated(&self) -> Result<(GraphId, u64), InvalidIndexBinError> {
+    /// The checks are the same as in [`TileIndexBinEntry::new`],
+    /// and the tile must also lie inside an archive of `archive_len` bytes.
+    fn validated(&self, archive_len: u64) -> Result<(GraphId, u64), InvalidIndexBinError> {
         let graph_id = self.graph_id()?;
         let offset = self.offset.get();
         check_offset(graph_id, offset)?;
+        check_range(graph_id, offset, self.size.get(), archive_len)?;
 
         Ok((graph_id, offset))
     }
 
-    fn graph_id(&self) -> Result<GraphId, InvalidIndexBinError> {
+    /// The graph ID of the indexed tile.
+    ///
+    /// # Errors
+    ///
+    /// Entries parsed from a foreign `index.bin` may contain arbitrary bit patterns,
+    /// so this fails if the stored tile ID has non-zero feature index bits.
+    pub fn graph_id(&self) -> Result<GraphId, InvalidIndexBinError> {
         // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
         // Therefore, this is guaranteed to be a valid Graph ID bit pattern.
@@ -496,6 +539,18 @@ impl TileIndexBinEntry {
         base_tile_id(graph_id)?;
 
         Ok(graph_id)
+    }
+
+    /// The byte offset of the tile payload from the beginning of the tarball.
+    #[inline]
+    pub fn offset(&self) -> u64 {
+        self.offset.get()
+    }
+
+    /// The size of the tile in bytes.
+    #[inline]
+    pub fn size(&self) -> u32 {
+        self.size.get()
     }
 }
 
@@ -519,6 +574,28 @@ fn base_tile_id(graph_id: GraphId) -> Result<u32, InvalidIndexBinError> {
 fn check_offset(graph_id: GraphId, offset: u64) -> Result<(), InvalidIndexBinError> {
     if offset == 0 || !offset.is_multiple_of(TAR_BLOCK_SIZE) {
         return Err(InvalidIndexBinError::Offset { graph_id, offset });
+    }
+
+    Ok(())
+}
+
+/// Makes sure that the tile at `offset` with `size` bytes lies inside an archive of `archive_len` bytes.
+fn check_range(
+    graph_id: GraphId,
+    offset: u64,
+    size: u32,
+    archive_len: u64,
+) -> Result<(), InvalidIndexBinError> {
+    if offset
+        .checked_add(u64::from(size))
+        .is_none_or(|end| end > archive_len)
+    {
+        return Err(InvalidIndexBinError::OutOfBounds {
+            graph_id,
+            offset,
+            size,
+            archive_len,
+        });
     }
 
     Ok(())
@@ -616,16 +693,34 @@ mod test {
 
     #[test]
     fn test_validate_parsed_entry() {
+        // The first fixture entry has 1,181,852 bytes at offset 23,040,
+        // so it ends at byte 1,204,892.
+        const FIRST_ENTRY_END: u64 = 23_040 + 1_181_852;
+
         let graph_id = GraphId::try_from_components(0, 2540, 0).expect("Unable to create graph ID");
         let index_entries = parse_index_bin(INDEX_BIN_FIXTURE).expect("Unable to parse fixture");
-        assert_eq!(index_entries[0].validated(), Ok((graph_id, 23040)));
+        assert_eq!(
+            index_entries[0].validated(FIRST_ENTRY_END),
+            Ok((graph_id, 23040)),
+            "A tile may end exactly at the end of the archive"
+        );
+        assert_eq!(
+            index_entries[0].validated(FIRST_ENTRY_END - 1),
+            Err(InvalidIndexBinError::OutOfBounds {
+                graph_id,
+                offset: 23040,
+                size: 1_181_852,
+                archive_len: FIRST_ENTRY_END - 1
+            }),
+            "A tile must not end past the end of the archive"
+        );
 
         // Change the low byte of the first offset (23040 = 0x5a00) to make it unaligned
         let mut bytes = INDEX_BIN_FIXTURE.to_vec();
         bytes[0] = 0x01;
         let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
         assert_eq!(
-            index_entries[0].validated(),
+            index_entries[0].validated(FIRST_ENTRY_END),
             Err(InvalidIndexBinError::Offset {
                 graph_id,
                 offset: 23041
@@ -638,7 +733,7 @@ mod test {
         bytes[..8].fill(0);
         let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
         assert_eq!(
-            index_entries[0].validated(),
+            index_entries[0].validated(FIRST_ENTRY_END),
             Err(InvalidIndexBinError::Offset {
                 graph_id,
                 offset: 0
@@ -651,7 +746,7 @@ mod test {
         bytes[11] |= 0x02;
         let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
         assert_eq!(
-            index_entries[0].validated(),
+            index_entries[0].validated(FIRST_ENTRY_END),
             Err(InvalidIndexBinError::FeatureIndex(
                 graph_id
                     .with_feature_index(1)
@@ -689,6 +784,73 @@ mod test {
             GraphId::from_components_unchecked(0, 2629, 0)
         });
         assert_eq!(index_entries[2].size.get(), 1_809_704);
+    }
+
+    #[test]
+    fn test_check_range() {
+        let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
+
+        assert_eq!(check_range(graph_id, 512, 512, 1024), Ok(()));
+        assert_eq!(
+            check_range(graph_id, 512, 513, 1024),
+            Err(InvalidIndexBinError::OutOfBounds {
+                graph_id,
+                offset: 512,
+                size: 513,
+                archive_len: 1024
+            }),
+            "A tile must end at or before the end of the archive"
+        );
+        assert_eq!(
+            check_range(graph_id, u64::MAX - 511, 1024, u64::MAX),
+            Err(InvalidIndexBinError::OutOfBounds {
+                graph_id,
+                offset: u64::MAX - 511,
+                size: 1024,
+                archive_len: u64::MAX
+            }),
+            "The end of the range must not overflow"
+        );
+    }
+
+    // Tragically, memory maps are not supported by Miri!
+    #[cfg(not(miri))]
+    #[test]
+    fn test_reject_index_past_end_of_archive() {
+        let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
+        // The index says that the tile has 10,000 bytes,
+        // but the archive only contains 100 bytes of tile data.
+        let index_entry =
+            TileIndexBinEntry::new(graph_id, 1536, 10_000).expect("Unable to create index entry");
+        let index_bytes = serialize_index_bin(core::slice::from_ref(&index_entry))
+            .expect("Unable to serialize the index");
+
+        let file = tempfile::NamedTempFile::new().expect("Unable to create a temporary file");
+        let mut builder = tar::Builder::new(file.as_file());
+        for (path, payload) in [("index.bin", index_bytes), ("0/003/015.gph", &[0x5a; 100])] {
+            let mut header = tar::Header::new_ustar();
+            header.set_size(payload.len() as u64);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, path, payload)
+                .expect("Unable to append a tar entry");
+        }
+        builder.finish().expect("Unable to finish the archive");
+
+        let result = TarballTileProvider::new_readonly(file.path());
+        assert!(
+            matches!(
+                result,
+                Err(GraphTileProviderError::InvalidIndexBin(
+                    InvalidIndexBinError::OutOfBounds {
+                        offset: 1536,
+                        size: 10_000,
+                        ..
+                    }
+                ))
+            ),
+            "An index entry past the end of the archive must be rejected"
+        );
     }
 
     #[test]
@@ -776,8 +938,12 @@ mod test {
     proptest! {
         #[test]
         fn test_index_bin_roundtrip(
-            // Levels are 3 bits, tile IDs are 22 bits, and offsets are counted in 512-byte blocks
-            raw_entries in vec((0u8..=7, 0u64..1 << 22, 1u64..=u64::MAX / 512, 0u32..=u32::MAX), 1..64)
+            // Levels are 3 bits, tile IDs are 22 bits, and offsets are counted in 512-byte blocks.
+            // The offsets are small enough that the end of every tile fits in a u64.
+            raw_entries in vec(
+                (0u8..=7, 0u64..1 << 22, 1u64..=(u64::MAX - u64::from(u32::MAX)) / 512, 0u32..=u32::MAX),
+                1..64
+            )
         ) {
             let entries: Vec<TileIndexBinEntry> = raw_entries
                 .into_iter()
@@ -793,9 +959,15 @@ mod test {
             let parsed = parse_index_bin(bytes).expect("Serialized bytes always parse");
 
             prop_assert_eq!(parsed, entries.as_slice());
-            // The read path accepts every entry that the write path creates
+            // The read path accepts every entry that the write path creates,
+            // in an archive which is just long enough for all of the tiles.
+            let archive_len = parsed
+                .iter()
+                .map(|entry| entry.offset() + u64::from(entry.size()))
+                .max()
+                .expect("The entry list is non-empty");
             for entry in parsed {
-                prop_assert!(entry.validated().is_ok());
+                prop_assert!(entry.validated(archive_len).is_ok());
             }
         }
     }

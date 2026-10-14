@@ -1,0 +1,12 @@
+# The stock C++ Valhalla Docker image for the integration tests
+# (scripts/integration/run_integration.sh, which .github/workflows/integration.yml runs).
+#
+# This is the ONLY place that pins the image; everything else reads this file.
+#
+# The pin uses a digest, not a tag, so that the engine under test cannot change
+# without a pull request. When you change the digest, run the harness again
+# and examine all differences in the logs and responses before you merge.
+#
+# Resolved from ghcr.io/valhalla/valhalla:latest on 2026-07-11
+# (Valhalla 3.8.2, commit 43f5a094b).
+ghcr.io/valhalla/valhalla@sha256:9b399ad7c1adecef622046cf511e9e4da623b2a5b01660d4379ece1fc213bdb2
