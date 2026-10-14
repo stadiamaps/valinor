@@ -20,6 +20,10 @@ use valhalla_graphtile::{
 /// Pretty-print information about a directed edge (incl. live traffic, if available)
 #[derive(Args, Debug)]
 pub(crate) struct GetEdgeArgs {
+    /// Path to valhalla.json
+    #[arg(env)]
+    valhalla_config: PathBuf,
+
     /// Graph ID (u64) or slash-form level/tile/index
     graph_id: String,
 }
@@ -107,10 +111,10 @@ fn pretty_print_edge_info<T: GraphTileProvider>(
     Ok(())
 }
 
-/// Runs the `get-edge` subcommand with the given Valhalla config.
-pub(crate) fn run(valhalla_config: &Path, args: &GetEdgeArgs) -> anyhow::Result<()> {
+/// Runs the `get-edge` subcommand.
+pub(crate) fn run(args: &GetEdgeArgs) -> anyhow::Result<()> {
     let gid = parse_graph_id(&args.graph_id)?;
-    let sources = parse_valhalla_data_paths(valhalla_config)?;
+    let sources = parse_valhalla_data_paths(&args.valhalla_config)?;
     let traffic_extract = if let Some(path) = sources.traffic_extract {
         info!(path = path.to_str(), "Using traffic extract");
         Some(TrafficTileProvider::new_readonly(path)?)

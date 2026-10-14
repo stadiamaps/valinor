@@ -2286,6 +2286,7 @@ dependencies = [
  "anyhow",
  "clap",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "valhalla-graphtile",
