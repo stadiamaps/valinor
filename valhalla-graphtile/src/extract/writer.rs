@@ -51,9 +51,11 @@ const ZERO_BLOCK: [u8; 512] = [0; 512];
 /// The entry name of the tile index (always the first entry in the archive).
 const INDEX_ENTRY_NAME: &str = "index.bin";
 
-/// An error while writing a tile extract.
-#[derive(Debug, Error)]
-pub enum ExtractWriteError {
+/// An error in an extract manifest.
+///
+/// The layout finds these errors before the writer writes any bytes.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ExtractLayoutError {
     /// An extract containing no tiles is meaningless
     /// (and its `index.bin` would be malformed).
     #[error("the extract manifest contains no tiles")]
@@ -61,6 +63,28 @@ pub enum ExtractWriteError {
     /// The manifest contains the same tile more than once.
     #[error("the extract manifest contains tile {0} more than once")]
     DuplicateTile(GraphId),
+    /// The manifest gives a tile a size of zero.
+    ///
+    /// A graph tile always contains at least a header,
+    /// so a size of zero is always an error in the manifest.
+    #[error("the extract manifest gives tile {0} a size of zero")]
+    EmptyTile(GraphId),
+    /// The manifest contains an ID which cannot be indexed.
+    #[error("invalid index.bin: {0}")]
+    InvalidIndexBin(#[from] InvalidIndexBinError),
+}
+
+/// An error while writing a tile extract.
+///
+/// `E` is the error type of the [`TileBytesSource`].
+#[derive(Debug, Error)]
+pub enum ExtractWriteError<E = GraphTileProviderError> {
+    /// The manifest is not valid (see [`ExtractLayout::from_manifest`]).
+    #[error("invalid manifest: {0}")]
+    Layout(#[from] ExtractLayoutError),
+    /// A requested tile is not in the source extract.
+    #[error("tile {0} is not in the source extract")]
+    MissingTile(GraphId),
     /// A graph ID in the manifest cannot be converted into a tar entry path.
     #[error("invalid graph ID: {0}")]
     InvalidGraphId(#[from] InvalidGraphIdError),
@@ -80,13 +104,14 @@ pub enum ExtractWriteError {
         /// The length of the bytes actually produced by the source.
         actual: usize,
     },
-    /// The manifest contains an ID which cannot be indexed,
-    /// or a tile offset that `index.bin` cannot record.
-    #[error("invalid index.bin: {0}")]
-    InvalidIndexBin(#[from] InvalidIndexBinError),
     /// The byte source failed to produce a tile.
-    #[error("tile provider error: {0}")]
-    Provider(#[from] GraphTileProviderError),
+    #[error("the byte source failed to produce tile {graph_id}: {source}")]
+    Source {
+        /// The base graph ID of the tile.
+        graph_id: GraphId,
+        /// The error from the byte source.
+        source: E,
+    },
     /// Writing to the destination failed.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -102,35 +127,32 @@ pub enum ExtractWriteError {
 /// lets implementations hand out bytes borrowed from per-call state,
 /// such as a tile pointer into a memory map.
 pub trait TileBytesSource {
+    /// The error type of this source.
+    type Error: core::error::Error + 'static;
+
     /// Calls `process` with the raw bytes of the tile containing the given graph ID.
     ///
     /// # Errors
     ///
     /// This fails if the tile does not exist in the source,
     /// or if fetching its bytes fails.
-    fn with_tile_bytes<F, T>(
-        &self,
-        graph_id: GraphId,
-        process: F,
-    ) -> Result<T, GraphTileProviderError>
+    fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
     where
         F: FnOnce(&[u8]) -> T;
 }
 
 impl<const MUT: bool> TileBytesSource for TarballTileProvider<MUT, false> {
+    type Error = GraphTileProviderError;
+
     #[inline]
-    fn with_tile_bytes<F, T>(
-        &self,
-        graph_id: GraphId,
-        process: F,
-    ) -> Result<T, GraphTileProviderError>
+    fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
     where
         F: FnOnce(&[u8]) -> T,
     {
         let tile_pointer = self.get_pointer_for_tile_containing(graph_id)?;
-        // SAFETY: We assume that the tile pointer is live and points to an actual graph tile location in the tarball.
-        // That is to say, we assume the tile is well-formed (correct index) and that the underlying memory map
-        // has not changed in a way that would render the tile invalid.
+        // SAFETY: The provider checks at construction that every index range lies inside the memory map.
+        // We assume that the underlying memory map has not changed in a way that would render the tile invalid
+        // (see the safety discussion on TarballTileProvider).
         let tile_bytes = unsafe { tile_pointer.as_tile_bytes() };
         Ok(process(tile_bytes))
     }
@@ -167,10 +189,11 @@ impl ExtractLayout {
     /// # Errors
     ///
     /// This fails if the manifest is empty, contains duplicate tiles,
+    /// contains a tile with a size of zero,
     /// or contains an ID which is not a valid base tile ID.
-    pub fn from_manifest(manifest: &[(GraphId, u32)]) -> Result<Self, ExtractWriteError> {
+    pub fn from_manifest(manifest: &[(GraphId, u32)]) -> Result<Self, ExtractLayoutError> {
         if manifest.is_empty() {
-            return Err(ExtractWriteError::EmptyManifest);
+            return Err(ExtractLayoutError::EmptyManifest);
         }
 
         let mut sorted = manifest.to_vec();
@@ -186,7 +209,10 @@ impl ExtractLayout {
         for (i, (graph_id, size)) in sorted.iter().enumerate() {
             // Equal (level, tile index) pairs are adjacent after the sort.
             if i > 0 && sorted[i - 1].0 == *graph_id {
-                return Err(ExtractWriteError::DuplicateTile(*graph_id));
+                return Err(ExtractLayoutError::DuplicateTile(*graph_id));
+            }
+            if *size == 0 {
+                return Err(ExtractLayoutError::EmptyTile(*graph_id));
             }
 
             let payload_offset = header_offset + TAR_BLOCK_SIZE;
@@ -253,7 +279,7 @@ pub fn write_extract<const MUT: bool, W: Write>(
             provider
                 .tile_size(base_id)
                 .map(|size| (base_id, size))
-                .ok_or(GraphTileProviderError::TileDoesNotExist)
+                .ok_or(ExtractWriteError::MissingTile(base_id))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -290,32 +316,35 @@ pub fn write_extract_from_source<S, W>(
     manifest: &[(GraphId, u32)],
     source: &S,
     mut dest: W,
-) -> Result<u64, ExtractWriteError>
+) -> Result<u64, ExtractWriteError<S::Error>>
 where
     S: TileBytesSource,
     W: Write,
 {
     let layout = ExtractLayout::from_manifest(manifest)?;
 
-    let index_bytes = serialize_index_bin(layout.index_entries())?;
+    let index_bytes =
+        serialize_index_bin(layout.index_entries()).map_err(ExtractLayoutError::from)?;
     write_entry(&mut dest, INDEX_ENTRY_NAME, index_bytes)?;
 
     for entry in layout.index_entries() {
         // Infallible in practice: the layout was constructed from valid base tile IDs.
-        let graph_id = entry.graph_id()?;
+        let graph_id = entry.graph_id().map_err(ExtractLayoutError::from)?;
         let path = tar_entry_path(graph_id)?;
         let expected = entry.size();
 
-        source.with_tile_bytes(graph_id, |tile_bytes| {
-            if tile_bytes.len() != expected as usize {
-                return Err(ExtractWriteError::SizeMismatch {
-                    graph_id,
-                    expected,
-                    actual: tile_bytes.len(),
-                });
-            }
-            write_entry(&mut dest, &path, tile_bytes).map_err(ExtractWriteError::from)
-        })??;
+        source
+            .with_tile_bytes(graph_id, |tile_bytes| {
+                if tile_bytes.len() != expected as usize {
+                    return Err(ExtractWriteError::SizeMismatch {
+                        graph_id,
+                        expected,
+                        actual: tile_bytes.len(),
+                    });
+                }
+                write_entry(&mut dest, &path, tile_bytes).map_err(ExtractWriteError::from)
+            })
+            .map_err(|source| ExtractWriteError::Source { graph_id, source })??;
     }
 
     // The standard end-of-archive marker: two zero blocks.
@@ -379,6 +408,11 @@ mod tests {
     /// An in-memory byte source for driving the writer without any I/O.
     struct MemorySource(HashMap<GraphId, Vec<u8>>);
 
+    /// The error of a [`MemorySource`] when it does not contain a tile.
+    #[derive(Debug, Error, PartialEq, Eq)]
+    #[error("the tile is not in memory")]
+    struct NotInMemory;
+
     impl MemorySource {
         fn from_manifest(manifest: &[(GraphId, u32)]) -> Self {
             let tiles = manifest
@@ -396,18 +430,16 @@ mod tests {
     }
 
     impl TileBytesSource for MemorySource {
-        fn with_tile_bytes<F, T>(
-            &self,
-            graph_id: GraphId,
-            process: F,
-        ) -> Result<T, GraphTileProviderError>
+        type Error = NotInMemory;
+
+        fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
         where
             F: FnOnce(&[u8]) -> T,
         {
             self.0
                 .get(&graph_id.tile_base_id())
                 .map(|tile_bytes| process(tile_bytes))
-                .ok_or(GraphTileProviderError::TileDoesNotExist)
+                .ok_or(NotInMemory)
         }
     }
 
@@ -477,31 +509,40 @@ mod tests {
 
     #[test]
     fn test_layout_rejects_empty_manifest() {
-        assert!(matches!(
-            ExtractLayout::from_manifest(&[]),
-            Err(ExtractWriteError::EmptyManifest)
-        ));
+        assert_eq!(
+            ExtractLayout::from_manifest(&[]).unwrap_err(),
+            ExtractLayoutError::EmptyManifest
+        );
     }
 
     #[test]
     fn test_layout_rejects_duplicate_tiles() {
         let manifest = [(tile(1, 47_701), 100), (tile(1, 47_701), 100)];
-        assert!(matches!(
-            ExtractLayout::from_manifest(&manifest),
-            Err(ExtractWriteError::DuplicateTile(graph_id)) if graph_id == tile(1, 47_701)
-        ));
+        assert_eq!(
+            ExtractLayout::from_manifest(&manifest).unwrap_err(),
+            ExtractLayoutError::DuplicateTile(tile(1, 47_701))
+        );
+    }
+
+    #[test]
+    fn test_layout_rejects_empty_tiles() {
+        let manifest = [(tile(0, 3015), 512), (tile(1, 47_701), 0)];
+        assert_eq!(
+            ExtractLayout::from_manifest(&manifest).unwrap_err(),
+            ExtractLayoutError::EmptyTile(tile(1, 47_701))
+        );
     }
 
     #[test]
     fn test_layout_rejects_non_base_tile_ids() {
         let with_feature_index =
             GraphId::try_from_components(1, 47_701, 7).expect("valid graph ID in test");
-        assert!(matches!(
-            ExtractLayout::from_manifest(&[(with_feature_index, 100)]),
-            Err(ExtractWriteError::InvalidIndexBin(
-                InvalidIndexBinError::FeatureIndex(_)
+        assert_eq!(
+            ExtractLayout::from_manifest(&[(with_feature_index, 100)]).unwrap_err(),
+            ExtractLayoutError::InvalidIndexBin(InvalidIndexBinError::FeatureIndex(
+                with_feature_index
             ))
-        ));
+        );
     }
 
     #[test]
@@ -529,9 +570,10 @@ mod tests {
         let result = write_extract_from_source(&manifest, &source, Vec::new());
         assert!(matches!(
             result,
-            Err(ExtractWriteError::Provider(
-                GraphTileProviderError::TileDoesNotExist
-            ))
+            Err(ExtractWriteError::Source {
+                graph_id,
+                source: NotInMemory
+            }) if graph_id == tile(0, 3015)
         ));
     }
 
@@ -648,6 +690,13 @@ mod tests {
         let excluded = tile(2, 763_925);
         assert!(source_provider.tile_size(excluded).is_some());
 
+        // A tile which is not in the fixture at all.
+        let not_in_fixture = tile(2, 0);
+        assert!(matches!(
+            write_extract(&source_provider, &[tile(0, 3015), not_in_fixture], Vec::new()),
+            Err(ExtractWriteError::MissingTile(graph_id)) if graph_id == not_in_fixture
+        ));
+
         let mut archive_bytes = Vec::new();
         let written = write_extract(&source_provider, &tile_ids, &mut archive_bytes)
             .expect("the extract writes cleanly");
@@ -660,13 +709,13 @@ mod tests {
 
         // Round-trip: Valinor's own reader opens the extract,
         // and every tile is byte-identical to the source.
-        let extract_path = std::env::temp_dir().join(format!(
-            "valinor-extract-round-trip-{}.tar",
-            std::process::id()
-        ));
-        std::fs::write(&extract_path, &archive_bytes).expect("the extract is written to disk");
+        // The temporary file is removed on drop, even if an assertion fails.
+        let mut extract_file = tempfile::NamedTempFile::new().expect("a temporary file is created");
+        extract_file
+            .write_all(&archive_bytes)
+            .expect("the extract is written to disk");
 
-        let extract_provider = TarballTileProvider::new_readonly(&extract_path)
+        let extract_provider = TarballTileProvider::new_readonly(extract_file.path())
             .expect("the generated extract opens cleanly");
 
         for graph_id in tile_ids {
@@ -684,8 +733,5 @@ mod tests {
 
         // Tiles outside the subset did not leak into the extract.
         assert!(extract_provider.tile_size(excluded).is_none());
-
-        drop(extract_provider);
-        std::fs::remove_file(&extract_path).expect("the temp extract is removed");
     }
 }

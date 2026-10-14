@@ -21,5 +21,6 @@
 mod writer;
 
 pub use writer::{
-    ExtractLayout, ExtractWriteError, TileBytesSource, write_extract, write_extract_from_source,
+    ExtractLayout, ExtractLayoutError, ExtractWriteError, TileBytesSource, write_extract,
+    write_extract_from_source,
 };
