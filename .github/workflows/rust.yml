@@ -23,7 +23,8 @@ jobs:
     - name: Check formatting
       run: cargo fmt --check
 
-  build:
+  test:
+    name: Test (${{ matrix.os }})
 
     strategy:
       matrix:
