@@ -9,7 +9,20 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Keep the QEMU and Miri runs in separate jobs.
+# Together they take more than the 6-hour job limit of GitHub Actions.
 jobs:
+  fmt:
+    name: Check formatting
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Check formatting
+      run: cargo fmt --check
+
   build:
 
     strategy:
@@ -22,9 +35,6 @@ jobs:
     - uses: actions/checkout@v6
     - uses: taiki-e/install-action@nextest
 
-    - name: Check formatting
-      run: cargo fmt --check
-
     - name: Build workspace
       run: cargo build --verbose
 
@@ -34,49 +44,67 @@ jobs:
     - name: Run doc tests (not currently supported by nextest https://github.com/nextest-rs/nextest/issues/16)
       run: cargo test --doc
 
-    - name: Install big-endian toolchain (s390x)
-      if: matrix.os == 'ubuntu-latest'
-      run: rustup target add s390x-unknown-linux-gnu
-
-    - name: Install s390x cross toolchain and QEMU (Ubuntu only)
-      if: matrix.os == 'ubuntu-latest'
-      run: sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu libc6-dev-s390x-cross qemu-user-static
-
-    - name: Run tests (big-endian s390x)
-      if: matrix.os == 'ubuntu-latest'
-      run: cargo nextest run --no-fail-fast --target s390x-unknown-linux-gnu
-
-    - name: Install Miri
-      if: matrix.os == 'ubuntu-latest'
-      run: rustup +nightly component add miri
-
-    - name: Run tests in Miri
-      if: matrix.os == 'ubuntu-latest'
-      run: cargo +nightly miri nextest run --no-fail-fast
-      env:
-        RUST_BACKTRACE: 1
-        MIRIFLAGS: -Zmiri-disable-isolation
-
-    - name: Run doc tests in Miri
-      if: matrix.os == 'ubuntu-latest'
-      run: cargo +nightly miri test --doc
-      env:
-        RUST_BACKTRACE: 1
-        MIRIFLAGS: -Zmiri-disable-isolation
-
-    - name: Install nightly big-endian toolchain (s390x)
-      if: matrix.os == 'ubuntu-latest'
-      run: rustup +nightly target add s390x-unknown-linux-gnu
-
-    - name: Run tests in Miri (big-endian s390x)
-      if: matrix.os == 'ubuntu-latest'
-      run: cargo +nightly miri nextest run --no-fail-fast --target s390x-unknown-linux-gnu
-      env:
-        RUST_BACKTRACE: 1
-        MIRIFLAGS: -Zmiri-disable-isolation
-
     - name: Build valhalla-graphtile in isolation (default feature flags)
       run: cargo build -p valhalla-graphtile
 
     - name: Build valhalla-graphtile in isolation (optional features)
       run: cargo build -p valhalla-graphtile --features serde
+
+  big-endian:
+    name: Test (big-endian s390x)
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+    - uses: taiki-e/install-action@nextest
+
+    - name: Install big-endian toolchain (s390x)
+      run: rustup target add s390x-unknown-linux-gnu
+
+    # .cargo/config.toml uses these packages as the s390x linker and test runner.
+    - name: Install s390x cross toolchain and QEMU
+      run: sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu libc6-dev-s390x-cross qemu-user-static
+
+    - name: Run tests (big-endian s390x)
+      run: cargo nextest run --no-fail-fast --target s390x-unknown-linux-gnu
+
+  miri:
+    name: Miri (${{ matrix.name }})
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Each leg runs for hours.
+      # A failure in one leg must not cancel the other leg.
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64
+            target: x86_64-unknown-linux-gnu
+            doc-tests: true
+          # Miri interprets the target, so this leg needs no cross toolchain or QEMU.
+          - name: big-endian s390x
+            target: s390x-unknown-linux-gnu
+            doc-tests: false
+
+    env:
+      RUST_BACKTRACE: 1
+      MIRIFLAGS: -Zmiri-disable-isolation
+
+    steps:
+    - uses: actions/checkout@v6
+    - uses: taiki-e/install-action@nextest
+
+    - name: Install Miri
+      run: rustup +nightly component add miri
+
+    - name: Install nightly target (${{ matrix.target }})
+      run: rustup +nightly target add ${{ matrix.target }}
+
+    - name: Run tests in Miri
+      run: cargo +nightly miri nextest run --no-fail-fast --target ${{ matrix.target }}
+
+    - name: Run doc tests in Miri
+      if: matrix.doc-tests
+      run: cargo +nightly miri test --doc
