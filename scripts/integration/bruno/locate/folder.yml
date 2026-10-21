@@ -1,0 +1,8 @@
+info:
+  name: locate
+  type: folder
+  seq: 2
+
+request:
+  auth: inherit
+

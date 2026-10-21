@@ -1,0 +1,4 @@
+name: full
+variables:
+  - name: baseUrl
+    value: http://localhost:8002
