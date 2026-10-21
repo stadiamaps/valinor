@@ -103,8 +103,6 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         }
 
         let archive_file = File::open(&path)?;
-        // Get the length before the index is read,
-        // so that every index entry can be checked against it in a single pass.
         let archive_len = archive_file.metadata()?.len();
         let mut archive = Archive::new(archive_file);
         let mut entries = archive.entries()?;
@@ -153,9 +151,8 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
             Arc::new(MmapOptions::new().map_raw_read_only(&file)?)
         };
 
-        // Tile pointers turn index ranges into slices without a bounds check.
-        // The index ranges were checked against `archive_len`,
-        // so the memory map must have exactly that length.
+        // Tile pointers slice the map without a bounds check,
+        // so the map must have the length that the index ranges were checked against.
         if mmap.len() as u64 != archive_len {
             return Err(GraphTileProviderError::InvalidTarball(format!(
                 "the archive changed size while it was opened ({archive_len} bytes, then {} bytes)",
@@ -485,9 +482,7 @@ pub(crate) const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
 
 /// The block size of a tar archive.
 ///
-/// Each tar entry is a one-block header,
-/// then the data of the entry, padded with zeros to a whole number of blocks.
-/// So the data of each entry starts on a block boundary.
+/// Each entry is a header block, then its data, padded with zeros to whole blocks.
 pub(crate) const TAR_BLOCK_SIZE: u64 = 512;
 
 /// The name of the tile index entry, which is the first entry of an extract tarball.
@@ -541,12 +536,10 @@ impl TileIndexBinEntry {
         })
     }
 
-    /// Validates a parsed entry, and returns its graph ID and offset.
+    /// Checks the entry against an archive of `archive_len` bytes,
+    /// and returns its graph ID and offset.
     ///
-    /// [`parse_index_bin`] does not examine the entry values,
-    /// so the read path must call this before it uses an entry.
-    /// The checks are the same as in [`TileIndexBinEntry::new`],
-    /// and the tile must also lie inside an archive of `archive_len` bytes.
+    /// Call this before you use an entry from [`parse_index_bin`], which does not check the values.
     fn validated(&self, archive_len: u64) -> Result<(GraphId, u64), InvalidIndexBinError> {
         let graph_id = self.graph_id()?;
         let offset = self.offset.get();
@@ -560,8 +553,7 @@ impl TileIndexBinEntry {
     ///
     /// # Errors
     ///
-    /// Entries parsed from a foreign `index.bin` may contain arbitrary bit patterns,
-    /// so this fails if the stored tile ID has non-zero feature index bits.
+    /// Returns an error if the stored tile ID has nonzero feature index bits.
     pub fn graph_id(&self) -> Result<GraphId, InvalidIndexBinError> {
         // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
@@ -847,8 +839,7 @@ mod test {
     #[test]
     fn test_reject_index_past_end_of_archive() {
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-        // The index says that the tile has 10,000 bytes,
-        // but the archive only contains 100 bytes of tile data.
+        // The index gives 10,000 bytes, but the archive has only 100 bytes of tile data.
         let index_entry =
             TileIndexBinEntry::new(graph_id, 1536, 10_000).expect("Unable to create index entry");
         let index_bytes = serialize_index_bin(core::slice::from_ref(&index_entry))
@@ -968,7 +959,7 @@ mod test {
         #[test]
         fn test_index_bin_roundtrip(
             // Levels are 3 bits, tile IDs are 22 bits, and offsets are counted in 512-byte blocks.
-            // The offsets are small enough that the end of every tile fits in a u64.
+            // The offset bound keeps the end of every tile inside a u64.
             raw_entries in vec(
                 (0u8..=7, 0u64..1 << 22, 1u64..=(u64::MAX - u64::from(u32::MAX)) / 512, 0u32..=u32::MAX),
                 1..64
@@ -988,8 +979,7 @@ mod test {
             let parsed = parse_index_bin(bytes).expect("Serialized bytes always parse");
 
             prop_assert_eq!(parsed, entries.as_slice());
-            // The read path accepts every entry that the write path creates,
-            // in an archive which is just long enough for all of the tiles.
+            // Every entry is valid in an archive that ends where the last tile ends.
             let archive_len = parsed
                 .iter()
                 .map(|entry| entry.offset() + u64::from(entry.size()))

@@ -62,38 +62,25 @@ pub enum GraphTileProviderError {
     TileTooLarge { graph_id: GraphId, size: u64 },
 }
 
-/// Access to the raw bytes of graph tiles, without decoding them.
-///
-/// This is for code which copies tiles verbatim,
-/// such as the extract writer ([`write_extract`](crate::extract::write_extract)).
-/// [`GraphTileProvider`] gives decoded views of tiles,
-/// and a view does not keep the bytes it was decoded from.
-///
-/// The tarball and directory providers implement this trait,
-/// so tiles can be copied from either an extract tarball or a tile directory.
+/// Access to the raw bytes of graph tiles, for code that copies tiles verbatim.
 pub trait TileBytesSource {
     /// The error type of this source.
     type Error: core::error::Error + 'static;
 
-    /// The size in bytes of the tile containing the given graph ID,
+    /// Returns the size in bytes of the tile that contains `graph_id`,
     /// or [`None`] if the source does not contain the tile.
     ///
     /// # Errors
     ///
-    /// This fails if the source cannot find out whether it contains the tile
-    /// (for example, because of an I/O error).
+    /// Returns an error if the source cannot find out whether it contains the tile.
     fn tile_size(&self, graph_id: GraphId) -> Result<Option<u32>, Self::Error>;
 
-    /// Calls `process` with the raw bytes of the tile containing the given graph ID.
-    ///
-    /// The callback style (rather than returning a slice)
-    /// lets implementations hand out bytes borrowed from per-call state,
-    /// such as a tile pointer into a memory map.
+    /// Calls `process` with the raw bytes of the tile that contains `graph_id`,
+    /// and returns its result.
     ///
     /// # Errors
     ///
-    /// This fails if the tile does not exist in the source,
-    /// or if fetching its bytes fails.
+    /// Returns an error if the source does not contain the tile, or if it cannot read the tile.
     fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
     where
         F: FnOnce(&[u8]) -> T;

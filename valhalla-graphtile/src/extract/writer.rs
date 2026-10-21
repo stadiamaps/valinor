@@ -1,38 +1,13 @@
-//! Manifest-first, single-pass streaming tar writer for tile extracts.
+//! A streaming tar writer for tile extracts.
 //!
-//! The tar format makes every output offset computable *before writing a single byte*,
-//! given a manifest of `(GraphId, size)` pairs.
-//! [`write_extract`] gets the manifest from the [`TileBytesSource`]
-//! (a tarball provider reads the sizes from its `index.bin`,
-//! and a directory provider reads them from the file system),
-//! so a caller never gives sizes by hand:
+//! The writer computes every offset from the tile sizes before it writes,
+//! so it writes the archive in one pass. The archive contains:
 //!
-//! - `index.bin` is one [`TileIndexBinEntry`] per tile,
-//!   padded to a 512-byte boundary, preceded by its 512-byte tar header.
-//! - Each tile contributes a 512-byte tar header plus its payload padded to 512 bytes.
-//!
-//! [`ExtractLayout`] is that pure computation.
-//! The writer then streams the corresponding archive into any [`Write`],
-//! with no `Seek`, no temp files, and no buffering of the whole archive.
-//!
-//! # Archive layout
-//!
-//! 1. `index.bin` is always the first entry.
-//!    Valhalla C++ treats it as optional for local tarballs
-//!    but requires it as the first entry for remotely-served tarballs,
-//!    and Valinor's own reader requires it unconditionally.
-//!    Writing it first satisfies every consumer
-//!    and keeps HTTP range-request serving possible.
-//! 2. Graph tiles follow, sorted ascending by (level, tile index),
-//!    with spec-compliant entry paths (see [`GraphId::relative_path`])
-//!    so that index-less consumers scanning the tar can still resolve them.
-//!    Note that this canonical order differs from the `Ord` impl of [`GraphId`],
-//!    which deliberately orders levels in reverse.
-//! 3. The archive ends with the standard two-block end-of-archive marker.
-//!
-//! Output is byte-deterministic:
-//! tar header metadata is fixed (mtime 0, uid/gid 0, mode 644, ustar format),
-//! and the writer sorts its own manifest, so caller order never leaks into the output.
+//! 1. `index.bin`, which Valhalla requires as the first entry of a remote tarball.
+//! 2. The tiles at the paths of [`GraphId::relative_path`],
+//!    in ascending (level, tile index) order.
+//!    This is not the `Ord` order of [`GraphId`].
+//! 3. The two-block end-of-archive marker.
 
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
@@ -44,8 +19,7 @@ use std::io::Write;
 use tar::{EntryType, Header};
 use thiserror::Error;
 
-/// A zeroed block (of [`TAR_BLOCK_SIZE`] bytes)
-/// for payload padding and the end-of-archive marker.
+/// Zeros for the payload padding and the end-of-archive marker.
 #[expect(clippy::cast_possible_truncation, reason = "512 fits in every usize")]
 const ZERO_BLOCK: [u8; TAR_BLOCK_SIZE as usize] = [0; TAR_BLOCK_SIZE as usize];
 
@@ -57,19 +31,15 @@ const END_OF_ARCHIVE_LEN: u64 = 2 * TAR_BLOCK_SIZE;
 /// The writer finds these errors before it writes any bytes.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ExtractLayoutError {
-    /// An extract containing no tiles is meaningless
-    /// (and its `index.bin` would be malformed).
+    /// The tile list is empty.
     #[error("the extract contains no tiles")]
     EmptyManifest,
-    /// The same tile is requested more than once.
+    /// The tile list contains a tile more than once.
     ///
-    /// Two graph IDs which differ only in the feature index are the same tile.
+    /// Graph IDs that differ only in the feature index are the same tile.
     #[error("the extract contains tile {0} more than once")]
     DuplicateTile(GraphId),
     /// The source gives a tile a size of zero.
-    ///
-    /// A graph tile always contains at least a header,
-    /// so a size of zero is always an error in the source.
     #[error("the source gives tile {0} a size of zero")]
     EmptyTile(GraphId),
     /// A tile cannot be indexed.
@@ -91,13 +61,8 @@ pub enum ExtractWriteError<E = GraphTileProviderError> {
     /// A requested graph ID cannot be converted into a tar entry path.
     #[error("invalid graph ID: {0}")]
     InvalidGraphId(#[from] InvalidGraphIdError),
-    /// The source produced a tile whose length differs from the size that it reported.
-    ///
-    /// Sizes must match exactly:
-    /// every downstream offset was computed from the reported sizes before any bytes were written,
-    /// so a mismatch would silently corrupt the rest of the archive.
-    /// This can happen if the source changes during the write
-    /// (for example, if a tile file in a tile directory is replaced).
+    /// The source produced a tile whose length differs from the size that it reported,
+    /// for example because a tile file changed during the write.
     #[error(
         "the source produced {actual} bytes for tile {graph_id}, but it reported a size of {expected} bytes"
     )]
@@ -122,37 +87,20 @@ pub enum ExtractWriteError<E = GraphTileProviderError> {
     Io(#[from] std::io::Error),
 }
 
-/// Writes a tile extract which contains the tiles of `tile_ids` into the destination.
+/// Writes an extract with the tiles of `tile_ids` from `source` into `dest`,
+/// and returns the number of bytes written.
 ///
-/// Each ID is normalized to its base tile ID (see [`GraphId::tile_base_id`]),
-/// and every tile is copied verbatim from the source.
-/// The source can be any [`TileBytesSource`],
-/// such as a [`TarballTileProvider`](crate::tile_provider::TarballTileProvider)
-/// or a [`DirectoryGraphTileProvider`](crate::tile_provider::DirectoryGraphTileProvider).
-///
-/// The archive is streamed sequentially in a single pass
-/// (no `Seek`, no temp files, no buffering of the whole archive):
-/// the `index.bin` entry first,
-/// then one entry per tile in canonical archive order
-/// (ascending by level, then tile index),
-/// and finally the two-block end-of-archive marker.
-/// The order of `tile_ids` does not matter.
-/// Output is byte-deterministic:
-/// the same tiles always produce byte-identical output.
-///
-/// Returns the total number of bytes written.
+/// The writer copies each tile verbatim, and it does not seek or buffer the archive.
+/// The order of `tile_ids` and their feature indexes do not change the output,
+/// so the same set of tiles always gives the same bytes.
 ///
 /// # Errors
 ///
-/// This fails before it writes any bytes if `tile_ids` is empty,
-/// contains the same tile more than once,
-/// or contains a tile which is not in the source.
-/// It fails during the write if the source fails to produce a tile,
-/// if a tile's length differs from the size that the source reported,
-/// or if writing to the destination fails.
-///
-/// The destination contents are unspecified after an error;
-/// streaming destinations cannot roll back partially written entries.
+/// Returns an error before any write if `tile_ids` is empty,
+/// names a tile more than once, or names a tile that is not in `source`.
+/// Returns an error during the write if `source` fails,
+/// if the length of a tile differs from its reported size, or if `dest` fails.
+/// After an error during the write, `dest` contains a partial archive.
 pub fn write_extract<S, W>(
     source: &S,
     tile_ids: &[GraphId],
@@ -181,39 +129,22 @@ where
     write_layout(&layout, source, dest)
 }
 
-/// The precomputed layout of an extract tarball.
-///
-/// This is the pure "manifest → offsets" half of the writer:
-/// given `(GraphId, size)` pairs,
-/// it computes the byte offset of every tile payload in the output archive
-/// and the exact total archive length,
-/// without performing any I/O.
-///
-/// The layout sorts the manifest into the canonical archive order
-/// (ascending by level, then tile index),
-/// so the index entries are in the exact order
-/// their tiles appear in the archive.
+/// The payload offset of each tile and the total length of an extract.
 #[derive(Debug)]
 struct ExtractLayout {
-    /// One index entry per tile, in canonical archive order.
+    /// One index entry for each tile, in archive order.
     entries: Vec<TileIndexBinEntry>,
     /// The total length of the archive in bytes, including the end-of-archive marker.
     total_len: u64,
 }
 
 impl ExtractLayout {
-    /// Computes the archive layout for a manifest of `(GraphId, size)` pairs.
-    ///
-    /// The manifest may be in any order (the layout sorts a copy into canonical order),
-    /// but every graph ID must be a *base* tile ID
-    /// (see [`GraphId::tile_base_id`]),
-    /// and each tile may appear at most once.
+    /// Computes the layout for `(GraphId, size)` pairs in any order.
     ///
     /// # Errors
     ///
-    /// This fails if the manifest is empty, contains duplicate tiles,
-    /// contains a tile with a size of zero,
-    /// or contains an ID which is not a valid base tile ID.
+    /// Returns an error if `manifest` is empty, contains a tile more than once,
+    /// contains a tile with a size of zero, or contains an ID that is not a base tile ID.
     fn from_manifest(manifest: &[(GraphId, u32)]) -> Result<Self, ExtractLayoutError> {
         if manifest.is_empty() {
             return Err(ExtractLayoutError::EmptyManifest);
@@ -222,15 +153,11 @@ impl ExtractLayout {
         let mut sorted = manifest.to_vec();
         sorted.sort_unstable_by_key(|(graph_id, _)| (graph_id.level(), graph_id.tile_id()));
 
-        // The archive is a sequence of entries, and `index.bin` is the first entry (at offset 0).
-        // `next_entry_offset` is the offset of the header block of the next entry;
-        // the payload of that entry starts one block later.
         let index_len = (INDEX_ENTRY_SIZE * sorted.len()) as u64;
         let mut next_entry_offset = entry_len(index_len);
 
         let mut entries = Vec::with_capacity(sorted.len());
         for (i, &(graph_id, size)) in sorted.iter().enumerate() {
-            // Equal (level, tile index) pairs are adjacent after the sort.
             if i > 0 && sorted[i - 1].0 == graph_id {
                 return Err(ExtractLayoutError::DuplicateTile(graph_id));
             }
@@ -249,21 +176,13 @@ impl ExtractLayout {
         })
     }
 
-    /// The index entries of the archive, in canonical archive order
-    /// (ascending by level, then tile index).
-    ///
-    /// Serializing these with [`serialize_index_bin`]
-    /// yields exactly the `index.bin` payload of the archive.
+    /// The index entries, in archive order.
     #[inline]
     fn index_entries(&self) -> &[TileIndexBinEntry] {
         &self.entries
     }
 
-    /// The exact total length of the archive in bytes,
-    /// including the end-of-archive marker.
-    ///
-    /// This is always a multiple of 512,
-    /// and is known before a single byte is written.
+    /// The total length of the archive in bytes.
     #[inline]
     fn total_len(&self) -> u64 {
         self.total_len
@@ -297,7 +216,7 @@ where
     write_entry(&mut dest, INDEX_BIN_ENTRY_NAME, index_bytes)?;
 
     for entry in layout.index_entries() {
-        // Infallible in practice: the layout was constructed from valid base tile IDs.
+        // The layout holds only valid base tile IDs, so this does not fail.
         let graph_id = entry.graph_id().map_err(ExtractLayoutError::from)?;
         let path = graph_id.relative_path(TILE_FILE_EXTENSION)?;
         let expected = entry.size();
@@ -330,16 +249,13 @@ where
     Ok(dest.position)
 }
 
-/// Writes a single tar entry: a 512-byte header, the payload, and zero padding to a block boundary.
-///
-/// Returns the offset of the payload in the archive.
+/// Writes a tar entry for `payload` at `path`, and returns the offset of the payload.
 fn write_entry<W: Write>(
     dest: &mut CountingWriter<W>,
     path: &str,
     payload: &[u8],
 ) -> std::io::Result<u64> {
-    // Determinism requires every header field to be fixed:
-    // ustar format, mtime 0, uid/gid 0 (with empty user/group names), mode 644.
+    // Keep all metadata fixed, so that the same tiles always give the same bytes.
     let mut header = Header::new_ustar();
     header.set_entry_type(EntryType::Regular);
     header.set_path(path)?;
@@ -360,13 +276,10 @@ fn write_entry<W: Write>(
     Ok(payload_offset)
 }
 
-/// A writer which counts the bytes written through it.
-///
-/// The writer uses the count to check the precomputed layout,
-/// and to return the number of bytes that it actually wrote.
+/// A writer that counts the bytes written through it.
 struct CountingWriter<W> {
     inner: W,
-    /// The number of bytes written so far, which is the offset of the next byte in the archive.
+    /// The offset of the next byte in the archive.
     position: u64,
 }
 
@@ -396,12 +309,10 @@ mod tests {
     use std::num::NonZeroUsize;
     use tar::Archive;
 
-    /// Helper to construct a base tile [`GraphId`].
     fn tile(level: u8, tile_id: u64) -> GraphId {
         GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
     }
 
-    /// An in-memory tile source for driving the writer without any I/O.
     #[derive(Default)]
     struct MemorySource {
         tiles: HashMap<GraphId, Vec<u8>>,
@@ -417,13 +328,11 @@ mod tests {
     struct Unreadable;
 
     impl MemorySource {
-        /// A source which contains one tile of the given size for each manifest entry.
         fn from_manifest(manifest: &[(GraphId, u32)]) -> Self {
             let tiles = manifest
                 .iter()
                 .map(|(graph_id, size)| {
-                    // Distinctive fill bytes so tiles cannot be confused with each other
-                    // (or with zero padding).
+                    // A nonzero fill for each tile, so that tiles and padding differ.
                     let fill =
                         0x11 * (1 + u8::try_from(graph_id.tile_id() % 13).expect("13 fits in u8"));
                     (*graph_id, vec![fill; *size as usize])
@@ -469,10 +378,7 @@ mod tests {
         }
     }
 
-    /// A manifest which is deliberately *not* in canonical order
-    /// (and not in `GraphId` order either),
-    /// with sizes exercising all padding cases:
-    /// an exact block multiple, a one-byte remainder, and a one-byte shortfall.
+    /// Tiles out of archive order, with sizes at, above, and below a block boundary.
     fn scrambled_manifest() -> Vec<(GraphId, u32)> {
         vec![
             (tile(2, 762_485), 100),
@@ -483,8 +389,7 @@ mod tests {
         ]
     }
 
-    /// Reads the archive with the `tar` crate (an independent tar reader),
-    /// and returns the path and payload offset of each entry, in archive order.
+    /// Returns the path and payload offset of each entry, as the `tar` crate reads them.
     fn read_entries(archive_bytes: &[u8]) -> Vec<(String, u64)> {
         Archive::new(archive_bytes)
             .entries()
@@ -501,7 +406,6 @@ mod tests {
             .collect()
     }
 
-    /// Reads the `index.bin` payload, which is the first entry of the archive.
     fn read_index_bytes(archive_bytes: &[u8]) -> Vec<u8> {
         let mut index_bytes = Vec::new();
         Archive::new(archive_bytes)
@@ -522,12 +426,10 @@ mod tests {
         let layout = ExtractLayout::from_manifest(&scrambled_manifest())
             .expect("the manifest is well-formed");
 
-        // Each entry is a header block, then its payload padded to whole blocks.
-        // The index has 5 tiles × 16 bytes = 80 bytes, so the index entry is 2 blocks,
-        // and the first tile header is at block 2.
-        // The payload of each tile starts one block after its header.
+        // The index entry (a header and 5 × 16 bytes) fills blocks 0 and 1.
+        // Each payload starts one block after its header.
         let expected = [
-            // (graph_id, payload offset, size), in canonical (level, tile index) order
+            // (graph_id, payload offset, size)
             (tile(0, 3015), 3 * B, 512), // header at block 2; payload is 1 block
             (tile(1, 47_700), 5 * B, 511), // header at block 4; payload is padded to 1 block
             (tile(1, 47_701), 7 * B, 513), // header at block 6; payload is padded to 2 blocks
@@ -596,7 +498,6 @@ mod tests {
     #[test]
     fn test_write_rejects_the_same_tile_twice() {
         let source = MemorySource::from_manifest(&[(tile(1, 47_701), 100)]);
-        // These IDs differ only in the feature index, so they are the same tile.
         let with_feature_index =
             GraphId::try_from_components(1, 47_701, 7).expect("valid graph ID in test");
         assert!(matches!(
@@ -619,7 +520,6 @@ mod tests {
 
     #[test]
     fn test_write_rejects_size_mismatch() {
-        // The source produces 99 bytes, but it reports a size of 100.
         let mut source = MemorySource::from_manifest(&[(tile(0, 3015), 99)]);
         source.reported_sizes.insert(tile(0, 3015), 100);
 
@@ -659,8 +559,6 @@ mod tests {
         assert_eq!(written, archive_bytes.len() as u64);
         assert!(archive_bytes.len().is_multiple_of(ZERO_BLOCK.len()));
 
-        // The archive must list index.bin first,
-        // then the tiles in canonical (level, tile index) order under spec-compliant paths.
         let entries = read_entries(&archive_bytes);
         let entry_paths: Vec<&str> = entries.iter().map(|(path, _)| path.as_str()).collect();
         assert_eq!(
@@ -675,8 +573,6 @@ mod tests {
             ]
         );
 
-        // The index says where each payload starts,
-        // and an independent tar reader finds each payload at the same offset.
         let index_bytes = read_index_bytes(&archive_bytes);
         let index_entries = parse_index_bin(&index_bytes).expect("the index parses");
         assert_eq!(index_entries.len(), manifest.len());
@@ -684,7 +580,6 @@ mod tests {
         for (index_entry, (_, payload_offset)) in index_entries.iter().zip(&entries[1..]) {
             assert_eq!(index_entry.offset(), *payload_offset);
 
-            // The payload at the indexed offset is byte-identical to the source tile.
             let graph_id = index_entry.graph_id().expect("the entry ID is valid");
             let start = usize::try_from(index_entry.offset()).expect("the offset fits in memory");
             let payload = &archive_bytes[start..start + index_entry.size() as usize];
@@ -702,8 +597,6 @@ mod tests {
         let mut first = Vec::new();
         write_extract(&source, &tile_ids, &mut first).expect("first write succeeds");
 
-        // A reordered tile list must not change the output either:
-        // the writer sorts its own copy.
         let mut reversed = tile_ids;
         reversed.reverse();
         let mut second = Vec::new();
@@ -715,8 +608,7 @@ mod tests {
     proptest! {
         #[test]
         fn test_archive_matches_independent_reader(
-            // Unique tiles (the map keys) on the three standard levels,
-            // with sizes that cover the padding cases around one and several blocks.
+            // Unique tiles on levels 0 to 2, with sizes of one to just over four blocks.
             tiles in btree_map((0u8..=2, 0u64..4050), 1u32..=2049, 1..32)
         ) {
             let manifest: Vec<(GraphId, u32)> = tiles
@@ -732,8 +624,6 @@ mod tests {
             prop_assert_eq!(written, archive_bytes.len() as u64);
             prop_assert_eq!(written, layout.total_len());
 
-            // Every index entry points at the payload that the tar reader finds,
-            // under the path of the same tile.
             let entries = read_entries(&archive_bytes);
             prop_assert_eq!(entries.len(), manifest.len() + 1);
             for (index_entry, (path, payload_offset)) in layout.index_entries().iter().zip(&entries[1..]) {
@@ -752,16 +642,13 @@ mod tests {
         let source_provider = TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
             .expect("Unable to init the source tile provider");
 
-        // A hand-picked subset of the fixture, spanning all three standard levels,
-        // deliberately not in canonical order,
-        // and with one non-zero feature index to test base ID normalization.
+        // Out of archive order, and with one nonzero feature index.
         let tile_ids = [
             tile(2, 763_926),
             tile(0, 3015),
             GraphId::try_from_components(1, 47_701, 42).expect("valid graph ID in test"),
             tile(2, 762_485),
         ];
-        // A fixture tile which is *not* part of the subset.
         let excluded = tile(2, 763_925);
         assert!(source_provider.tile_size(excluded).unwrap().is_some());
 
@@ -770,14 +657,10 @@ mod tests {
             .expect("the extract writes cleanly");
         assert_eq!(written, archive_bytes.len() as u64);
 
-        // Determinism on real data: a second run is byte-identical.
         let mut second = Vec::new();
         write_extract(&source_provider, &tile_ids, &mut second).expect("second write succeeds");
         assert_eq!(archive_bytes, second);
 
-        // Round-trip: Valinor's own reader opens the extract,
-        // and every tile is byte-identical to the source.
-        // The temporary file is removed on drop, even if an assertion fails.
         let mut extract_file = tempfile::NamedTempFile::new().expect("a temporary file is created");
         extract_file
             .write_all(&archive_bytes)
@@ -798,7 +681,6 @@ mod tests {
                 .expect("the tile is in the extract");
         }
 
-        // Tiles outside the subset did not leak into the extract.
         assert!(extract_provider.tile_size(excluded).unwrap().is_none());
     }
 
@@ -806,8 +688,7 @@ mod tests {
     #[cfg(not(miri))]
     #[test]
     fn test_directory_and_tarball_sources_write_the_same_extract() {
-        // The tarball fixture was made from the directory fixture with valhalla_build_extract,
-        // so both sources contain the same tiles, and the extracts must be byte-identical.
+        // The two fixtures contain the same tiles.
         let tarball = TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
             .expect("Unable to init the tarball tile provider");
         let directory = DirectoryGraphTileProvider::new(
@@ -815,7 +696,6 @@ mod tests {
             NonZeroUsize::new(1).unwrap(),
         );
 
-        // Every tile of the fixture.
         let tile_ids: Vec<GraphId> = tarball.tile_ids().copied().collect();
         assert!(tile_ids.len() > 1);
 
@@ -827,7 +707,6 @@ mod tests {
             .expect("the extract writes cleanly from the directory");
         assert_eq!(from_tarball, from_directory);
 
-        // A tile which is in neither fixture fails the same way for both sources.
         for result in [
             write_extract(&tarball, &[tile(0, 3015), tile(2, 0)], Vec::new()),
             write_extract(&directory, &[tile(0, 3015), tile(2, 0)], Vec::new()),

@@ -20,14 +20,8 @@ use valhalla_graphtile::tile_provider::{
 
 /// Write an offline sub-extract of a tile extract tarball or a tile directory
 ///
-/// Copies the given graph tiles of the source into a new, fully spec-compliant
-/// extract tarball. Every tile in the output is byte-identical to its source tile,
-/// and the output is interchangeable with `valhalla_build_extract` output,
-/// so it is consumable by both stock Valhalla and Valinor.
-///
-/// Unlike the other subcommands, this takes the source path directly
-/// rather than a Valhalla JSON config: extraction reads a set of tiles,
-/// not a configured tile hierarchy.
+/// The output is an extract tarball in the format of `valhalla_build_extract`,
+/// with the given tiles copied byte for byte.
 #[derive(Args, Debug)]
 pub(crate) struct ExtractArgs {
     /// Path to the source: a tile extract tarball (e.g. tiles.tar)
@@ -58,7 +52,7 @@ struct ExtractSummary {
     bytes_written: u64,
 }
 
-/// Writes the sub-extract from a tile directory or a tarball, as the source path requires.
+/// Writes the sub-extract from the tile directory or the tarball at the source path.
 fn write_sub_extract(args: &ExtractArgs) -> anyhow::Result<ExtractSummary> {
     let bytes_written = if args.source.is_dir() {
         // The writer reads each tile once, so a cache is of no use.
@@ -80,21 +74,15 @@ fn write_sub_extract(args: &ExtractArgs) -> anyhow::Result<ExtractSummary> {
     })
 }
 
-/// Writes the extract to a temporary file next to `output`,
-/// then renames the temporary file to `output`.
+/// Writes the extract to a temporary file next to `output`, and then renames it to `output`.
 ///
-/// A partial tarball is worse than no tarball
-/// (it may open, but with tiles silently missing or truncated).
-/// The rename is atomic, so `output` is never a partial tarball:
-/// it is either the complete extract, or what it was before the call.
-/// If the write fails, the temporary file is removed.
+/// If the write fails, `output` keeps its previous contents.
 fn write_atomically<S>(source: &S, tiles: &[GraphId], output: &Path) -> anyhow::Result<u64>
 where
     S: TileBytesSource,
     S::Error: Send + Sync,
 {
-    // The temporary file must be on the same file system as the output,
-    // or the rename cannot be atomic.
+    // The rename is atomic only within one file system.
     let output_dir = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -102,8 +90,7 @@ where
 
     let mut builder = tempfile::Builder::new();
     builder.prefix(".valinor-extract-").suffix(".tar.partial");
-    // Temporary files are only readable by the owner by default.
-    // Give the output the same permissions as a file from `File::create`.
+    // Use the permissions of `File::create`, not the owner-only default of `tempfile`.
     #[cfg(unix)]
     builder.permissions(Permissions::from_mode(0o666));
     let temp_file: NamedTempFile = builder.tempfile_in(output_dir).with_context(|| {
@@ -170,8 +157,7 @@ mod tests {
         GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
     }
 
-    // Tragically, memory maps are not supported by Miri,
-    // and the tests below open tarballs with the memory-mapped provider!
+    // Tragically, memory maps are not supported by Miri!
     #[cfg(not(miri))]
     #[test]
     fn extract_round_trips_from_a_tarball_and_a_directory() {
@@ -196,8 +182,6 @@ mod tests {
             let on_disk = fs::metadata(&output).expect("the output exists").len();
             assert_eq!(summary.bytes_written, on_disk);
 
-            // The produced tarball opens with the crate's own reader
-            // and contains exactly the requested tiles.
             let extract = TarballTileProvider::new_readonly(&output)
                 .expect("the generated extract opens cleanly");
             let mut extracted: Vec<GraphId> = extract.tile_ids().copied().collect();
@@ -214,7 +198,6 @@ mod tests {
             "the tarball and directory fixtures give the same extract"
         );
 
-        // Only the outputs are in the directory: no temporary files are left.
         let mut names: Vec<_> = fs::read_dir(temp_dir.path())
             .expect("the directory is readable")
             .map(|entry| entry.expect("the entry is readable").file_name())

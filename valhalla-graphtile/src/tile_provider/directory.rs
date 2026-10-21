@@ -131,10 +131,9 @@ impl DirectoryGraphTileProvider {
             .join(graph_id.file_path(TILE_FILE_EXTENSION)?))
     }
 
-    /// Reads all bytes of the tile file for the given base graph ID.
+    /// Reads the tile file for `base_graph_id`.
     ///
-    /// The caller must hold the lock for the graph ID,
-    /// so that the read cannot overlap a call to [`DirectoryGraphTileProvider::overwrite_tile`].
+    /// The caller must hold the lock for `base_graph_id`.
     fn read_tile_bytes(&self, base_graph_id: GraphId) -> Result<Vec<u8>, GraphTileProviderError> {
         let path = self.path_for_graph_id(base_graph_id)?;
         // NOTE: Does not handle compressed tiles
@@ -153,7 +152,6 @@ impl TileBytesSource for DirectoryGraphTileProvider {
         let base_graph_id = graph_id.tile_base_id();
         let size = match std::fs::metadata(self.path_for_graph_id(base_graph_id)?) {
             Ok(metadata) if metadata.is_file() => metadata.len(),
-            // Something other than a tile file (such as a directory) has the tile's path.
             Ok(_) => return Ok(None),
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
@@ -175,9 +173,7 @@ impl TileBytesSource for DirectoryGraphTileProvider {
         let lock = self.lock_table.lock_for(base_graph_id);
         let _guard = lock.lock();
 
-        // This reads the file directly, not through the tile cache:
-        // a caller that copies tiles reads each tile once,
-        // and caching those tiles would evict the tiles that other readers use.
+        // Bypass the tile cache, so that a copy of many tiles does not evict hot tiles.
         let tile_bytes = self.read_tile_bytes(base_graph_id)?;
         Ok(process(&tile_bytes))
     }

@@ -84,7 +84,6 @@ mod tests {
                 input,
             ])
             .expect_err("a malformed tile is rejected");
-            // The error from GraphId::parse_tile names the bad value.
             assert!(error.to_string().contains(input), "{input}: {error}");
         }
     }

@@ -235,31 +235,25 @@ impl GraphId {
         GraphId(U64::<LE>::new(self.value() & 0x01ff_ffff))
     }
 
-    /// Parses the base graph ID of a tile from the `level/tile_id` form (e.g. `2/762485`).
+    /// Parses the base graph ID of a tile from `level/tile_id` (e.g. `2/762485`).
     ///
-    /// This is the tile form of [`GraphId::from_str`]:
-    /// it names a whole tile, so it has no feature index component,
-    /// and the feature index of the result is zero.
     /// Whitespace around each component is ignored.
     ///
     /// # Errors
     ///
-    /// This fails if the input does not have exactly two `/`-separated components,
+    /// Returns an error if `input` does not have two `/`-separated components,
     /// if a component is not a non-negative integer,
-    /// or if the level or tile ID is out of range (see [`GraphId::try_from_components`]).
+    /// or if the level or the tile ID is out of range.
     pub fn parse_tile(input: &str) -> Result<Self, ParseGraphIdError> {
         let [level, tile_id] = parse_components(input, "level/tile_id", ["level", "tile ID"])?;
         components_to_graph_id(input, level, tile_id, 0)
     }
 
-    /// Constructs the relative path of the tile file for this graph ID,
+    /// Returns the relative path of the tile file for this graph ID,
     /// with `/` separators on every platform (e.g. `2/000/762/485.gph`).
     ///
-    /// This is the form that Valhalla uses for tile directories, tar entry names, and tile URLs.
-    /// The first component is the level;
-    /// the rest is the tile ID, zero-padded to the width of the level
-    /// and split into groups of three digits.
-    /// The feature index is ignored.
+    /// Valhalla uses this path in tile directories and extract tarballs.
+    /// The feature index is not part of the path.
     ///
     /// # Errors
     ///
@@ -286,8 +280,7 @@ impl GraphId {
         let padded_id = format!("{tile_id:0>n_digits$}");
 
         let mut path = level_number.to_string();
-        // The padded ID is ASCII digits, and its length is a multiple of 3,
-        // so these byte ranges are always whole groups.
+        // The padded ID is ASCII, and its length is a multiple of 3.
         for group_start in (0..n_digits).step_by(3) {
             path.push('/');
             path.push_str(&padded_id[group_start..group_start + 3]);
@@ -300,10 +293,7 @@ impl GraphId {
         Ok(path)
     }
 
-    /// Constructs a relative path for the given tile.
-    ///
-    /// This is [`GraphId::relative_path`] as a [`PathBuf`],
-    /// with the separators of the platform.
+    /// Returns [`GraphId::relative_path`] as a [`PathBuf`], with the separators of the platform.
     ///
     /// # Errors
     ///
@@ -554,15 +544,13 @@ mod tests {
         );
     }
 
-    /// Helper to construct a base tile [`GraphId`].
     fn tile(level: u8, tile_id: u64) -> GraphId {
         GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
     }
 
     #[test]
     fn test_relative_path() {
-        // Levels 0 and 1 pad the tile ID to 6 digits (two groups);
-        // level 2 pads to 9 digits (three groups).
+        // Levels 0 and 1 pad the tile ID to 6 digits, and level 2 pads it to 9.
         for (graph_id, expected) in [
             (tile(0, 3015), "0/003/015.gph"),
             (tile(0, 49), "0/000/049.gph"),
@@ -572,21 +560,18 @@ mod tests {
             (tile(2, 1_036_799), "2/001/036/799.gph"),
         ] {
             assert_eq!(graph_id.relative_path("gph").as_deref(), Ok(expected));
-            // The file path is the same path with the separators of the platform.
             assert_eq!(
                 graph_id.file_path("gph"),
                 Ok(expected.split('/').collect::<PathBuf>())
             );
         }
 
-        // The feature index is not part of the path.
         let with_index = GraphId::try_from_components(2, 762_485, 42).unwrap();
         assert_eq!(
             with_index.relative_path("gph").as_deref(),
             Ok("2/000/762/485.gph")
         );
 
-        // An empty extension adds no dot.
         assert_eq!(
             tile(1, 47_701).relative_path("").as_deref(),
             Ok("1/047/701")
@@ -595,8 +580,7 @@ mod tests {
 
     #[test]
     fn test_relative_path_invalid() {
-        // Level 0 has 45 rows and 90 columns of 4-degree tiles,
-        // so its largest tile ID is 45 * 90 - 1 = 4049.
+        // Level 0 has 45 × 90 tiles, so its largest tile ID is 4049.
         assert_eq!(
             tile(0, 4049).relative_path("gph").as_deref(),
             Ok("0/004/049.gph")
@@ -605,7 +589,7 @@ mod tests {
             tile(0, 4050).relative_path("gph"),
             Err(InvalidGraphIdError::GraphTileId)
         );
-        // Levels 4 to 7 fit in the bit field, but there is no tiling system for them.
+        // Levels 4 to 7 fit in the bit field, but they have no tiling system.
         assert_eq!(
             tile(5, 0).relative_path("gph"),
             Err(InvalidGraphIdError::Level)
@@ -625,7 +609,6 @@ mod tests {
             expected: "level/tile_id",
         };
         assert_eq!(GraphId::parse_tile("2"), Err(format("2")));
-        // A graph ID with a feature index is not a tile.
         assert_eq!(GraphId::parse_tile("2/763926/7"), Err(format("2/763926/7")));
         assert_eq!(
             GraphId::parse_tile("2/"),
@@ -669,7 +652,6 @@ mod tests {
         let expected = GraphId::try_from_components(2, 762_485, 42).unwrap();
         assert_eq!("2/762485/42".parse(), Ok(expected));
         assert_eq!(expected.value().to_string().parse(), Ok(expected));
-        // Whitespace around a packed value is ignored.
         assert_eq!(
             " 16889572344463360 "
                 .parse::<GraphId>()
