@@ -26,6 +26,7 @@ use crate::graph_tile::{
 pub use directory::DirectoryGraphTileProvider;
 pub use iterators::GraphSearchResult;
 use iterators::ResultsWithinRadius;
+pub(crate) use tarball::{INDEX_BIN_ENTRY_NAME, TAR_BLOCK_SIZE};
 pub use tarball::{
     InvalidIndexBinError, TarballTileProvider, TileIndexBinEntry, parse_index_bin,
     serialize_index_bin,

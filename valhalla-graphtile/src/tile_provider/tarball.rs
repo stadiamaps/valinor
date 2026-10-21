@@ -116,10 +116,10 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         };
 
         let mut entry = entry?;
-        if entry.path()?.to_string_lossy() != "index.bin" {
-            return Err(GraphTileProviderError::InvalidTarball(
-                "Expected index.bin at the start of the archive".to_string(),
-            ));
+        if entry.path()?.to_string_lossy() != INDEX_BIN_ENTRY_NAME {
+            return Err(GraphTileProviderError::InvalidTarball(format!(
+                "Expected {INDEX_BIN_ENTRY_NAME} at the start of the archive"
+            )));
         }
 
         // Read the index file
@@ -459,8 +459,14 @@ pub struct TileIndexBinEntry {
 const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
 
 /// The block size of a tar archive.
-/// The data of each tar entry starts on a block boundary.
-const TAR_BLOCK_SIZE: u64 = 512;
+///
+/// Each tar entry is a one-block header,
+/// then the data of the entry, padded with zeros to a whole number of blocks.
+/// So the data of each entry starts on a block boundary.
+pub(crate) const TAR_BLOCK_SIZE: u64 = 512;
+
+/// The name of the tile index entry, which is the first entry of an extract tarball.
+pub(crate) const INDEX_BIN_ENTRY_NAME: &str = "index.bin";
 
 /// The reasons why an `index.bin` file or one of its entries is not valid.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -693,24 +699,22 @@ mod test {
 
     #[test]
     fn test_validate_parsed_entry() {
-        // The first fixture entry has 1,181,852 bytes at offset 23,040,
-        // so it ends at byte 1,204,892.
-        const FIRST_ENTRY_END: u64 = 23_040 + 1_181_852;
-
         let graph_id = GraphId::try_from_components(0, 2540, 0).expect("Unable to create graph ID");
         let index_entries = parse_index_bin(INDEX_BIN_FIXTURE).expect("Unable to parse fixture");
+        // The smallest archive that can contain the first tile ends where that tile ends.
+        let first_entry_end = index_entries[0].offset() + u64::from(index_entries[0].size());
         assert_eq!(
-            index_entries[0].validated(FIRST_ENTRY_END),
+            index_entries[0].validated(first_entry_end),
             Ok((graph_id, 23040)),
             "A tile may end exactly at the end of the archive"
         );
         assert_eq!(
-            index_entries[0].validated(FIRST_ENTRY_END - 1),
+            index_entries[0].validated(first_entry_end - 1),
             Err(InvalidIndexBinError::OutOfBounds {
                 graph_id,
                 offset: 23040,
                 size: 1_181_852,
-                archive_len: FIRST_ENTRY_END - 1
+                archive_len: first_entry_end - 1
             }),
             "A tile must not end past the end of the archive"
         );
@@ -720,7 +724,7 @@ mod test {
         bytes[0] = 0x01;
         let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
         assert_eq!(
-            index_entries[0].validated(FIRST_ENTRY_END),
+            index_entries[0].validated(first_entry_end),
             Err(InvalidIndexBinError::Offset {
                 graph_id,
                 offset: 23041
@@ -733,7 +737,7 @@ mod test {
         bytes[..8].fill(0);
         let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
         assert_eq!(
-            index_entries[0].validated(FIRST_ENTRY_END),
+            index_entries[0].validated(first_entry_end),
             Err(InvalidIndexBinError::Offset {
                 graph_id,
                 offset: 0
@@ -746,7 +750,7 @@ mod test {
         bytes[11] |= 0x02;
         let index_entries = parse_index_bin(&bytes).expect("Unable to parse modified fixture");
         assert_eq!(
-            index_entries[0].validated(FIRST_ENTRY_END),
+            index_entries[0].validated(first_entry_end),
             Err(InvalidIndexBinError::FeatureIndex(
                 graph_id
                     .with_feature_index(1)

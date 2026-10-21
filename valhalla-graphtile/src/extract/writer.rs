@@ -34,22 +34,17 @@
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
 use crate::tile_provider::{
-    GraphTileProviderError, InvalidIndexBinError, TarballTileProvider, TileIndexBinEntry,
-    serialize_index_bin,
+    GraphTileProviderError, INDEX_BIN_ENTRY_NAME, InvalidIndexBinError, TAR_BLOCK_SIZE,
+    TarballTileProvider, TileIndexBinEntry, serialize_index_bin,
 };
 use std::io::Write;
 use tar::{EntryType, Header};
 use thiserror::Error;
 
-/// The tar block size; every entry is a one-block header plus a payload padded to a block.
-const TAR_BLOCK_SIZE: u64 = 512;
-
 /// A zeroed block (of [`TAR_BLOCK_SIZE`] bytes)
 /// for payload padding and the end-of-archive marker.
-const ZERO_BLOCK: [u8; 512] = [0; 512];
-
-/// The entry name of the tile index (always the first entry in the archive).
-const INDEX_ENTRY_NAME: &str = "index.bin";
+#[expect(clippy::cast_possible_truncation, reason = "512 fits in every usize")]
+const ZERO_BLOCK: [u8; TAR_BLOCK_SIZE as usize] = [0; TAR_BLOCK_SIZE as usize];
 
 /// An error in an extract manifest.
 ///
@@ -325,7 +320,7 @@ where
 
     let index_bytes =
         serialize_index_bin(layout.index_entries()).map_err(ExtractLayoutError::from)?;
-    write_entry(&mut dest, INDEX_ENTRY_NAME, index_bytes)?;
+    write_entry(&mut dest, INDEX_BIN_ENTRY_NAME, index_bytes)?;
 
     for entry in layout.index_entries() {
         // Infallible in practice: the layout was constructed from valid base tile IDs.
