@@ -395,6 +395,7 @@ fn tar_entry_path(graph_id: GraphId) -> Result<String, InvalidGraphIdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures;
     use crate::tile_provider::parse_index_bin;
     use std::collections::HashMap;
     use std::io::Read;
@@ -669,11 +670,7 @@ mod tests {
     #[cfg(not(miri))]
     #[test]
     fn test_andorra_round_trip() {
-        use std::path::PathBuf;
-
-        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles.tar");
+        let fixture_path = test_fixtures::andorra_tiles_tar();
         let source_provider = TarballTileProvider::new_readonly(fixture_path)
             .expect("Unable to init the source tile provider");
 

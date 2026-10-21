@@ -231,15 +231,14 @@ impl TrafficTileProvider<true> {
 #[cfg(all(test, not(miri)))]
 mod tests {
     use crate::GraphId;
+    use crate::test_fixtures;
     use crate::tile_provider::TrafficTileProvider;
     use crate::traffic_tile::{SpeedValue, TrafficSpeed};
     use std::path::PathBuf;
 
     #[test]
     fn test_get_speed() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-traffic.tar");
+        let path = test_fixtures::andorra_traffic_tar();
         let provider =
             TrafficTileProvider::new_readonly(path).expect("Unable to init tile provider");
 
@@ -269,9 +268,7 @@ mod tests {
     fn test_set_speed() {
         const DESIRED_SPEED: u8 = 32;
 
-        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-traffic.tar");
+        let fixture_path = test_fixtures::andorra_traffic_tar();
 
         // let tmp_path = PathBuf::from("/Users/ianthetechie/valhalla-docker/valhalla/traffic.tar");
         let tmp_dir = option_env!("RUNNER_TEMP").unwrap_or("/tmp");

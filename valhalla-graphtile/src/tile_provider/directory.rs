@@ -202,6 +202,7 @@ mod test {
     use super::DirectoryGraphTileProvider;
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
+    use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
     use crate::tile_provider::GraphTileProvider;
     use core::num::NonZeroUsize;
@@ -210,13 +211,10 @@ mod test {
         rng,
     };
     use std::collections::HashSet;
-    use std::path::PathBuf;
 
     #[test]
     fn test_get_tile() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile = provider
@@ -232,9 +230,7 @@ mod test {
     fn test_get_opp_edge() {
         let mut rng = rng();
 
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile = provider
@@ -264,9 +260,7 @@ mod test {
 
     #[test]
     fn test_get_shortcut_fixture() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
 
         // This test relies on the state of the andorra-tiles fixtures.
@@ -310,9 +304,7 @@ mod test {
     #[cfg(not(miri))]
     #[test]
     fn test_level_zero_shortcut_sanity() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
 
         let base_id = GraphId::try_from_components(0, 3015, 0).unwrap();
@@ -393,9 +385,7 @@ mod test {
         // how the tile structure works.
         // Specifically, there is only a single "copy" of a feature in the routing graph,
         // and all features of a specific road class exist in specific tile levels.
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_ids = vec![
             GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID"),
