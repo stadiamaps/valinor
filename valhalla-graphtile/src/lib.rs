@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 // The implementations are sufficiently complex that we want to have lots of files,
 // But many of those only have one or two useful definitions to re-export,
 // so this flattens things for better ergonomics.
-pub use graph_id::GraphId;
+pub use graph_id::{GraphId, InvalidGraphIdError, ParseGraphIdError};
 
 /// Road class; broad hierarchies of relative (and sometimes locally specific) importance.
 ///
