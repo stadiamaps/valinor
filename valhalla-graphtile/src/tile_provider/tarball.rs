@@ -1,4 +1,4 @@
-use super::{GraphTileProvider, GraphTileProviderError};
+use super::{GraphTileProvider, GraphTileProviderError, TileBytesSource};
 use crate::GraphId;
 use crate::graph_tile::handles::MmapGraphTileHandle;
 use crate::graph_tile::{
@@ -190,16 +190,49 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         self.tile_index.keys()
     }
 
-    /// The size in bytes of the tile containing this graph ID,
-    /// or [`None`] if the tile is not part of the tarball archive.
+    /// Gets a pointer for the tile containing this graph ID.
     ///
-    /// The size comes straight from the tarball's `index.bin`,
-    /// so no tile data is accessed.
+    /// # Errors
+    ///
+    /// If the tile is not part of the tarball archive,
+    /// this returns [`GraphTileProviderError::TileDoesNotExist`].
     #[inline]
-    pub fn tile_size(&self, graph_id: GraphId) -> Option<u32> {
-        self.tile_index
+    fn tile_pointer(&self, graph_id: GraphId) -> Result<MmapTilePointer, GraphTileProviderError> {
+        let base_graph_id = graph_id.tile_base_id();
+        let Some(offsets) = self.tile_index.get(&base_graph_id) else {
+            return Err(GraphTileProviderError::TileDoesNotExist);
+        };
+
+        Ok(MmapTilePointer {
+            mmap: self.mmap.clone(),
+            offsets: *offsets,
+        })
+    }
+}
+
+impl<const MUT: bool, const CACHE: bool> TileBytesSource for TarballTileProvider<MUT, CACHE> {
+    type Error = GraphTileProviderError;
+
+    /// The size comes from the `index.bin` of the tarball, so this reads no tile data.
+    #[inline]
+    fn tile_size(&self, graph_id: GraphId) -> Result<Option<u32>, Self::Error> {
+        Ok(self
+            .tile_index
             .get(&graph_id.tile_base_id())
-            .map(|tile_offset| tile_offset.size)
+            .map(|tile_offset| tile_offset.size))
+    }
+
+    #[inline]
+    fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
+    where
+        F: FnOnce(&[u8]) -> T,
+    {
+        let tile_pointer = self.tile_pointer(graph_id)?;
+        // SAFETY: The provider checks at construction that every index range lies inside the memory map.
+        // We assume that the underlying memory map has not changed in a way that would render the tile invalid
+        // (see the safety discussion on TarballTileProvider).
+        let tile_bytes = unsafe { tile_pointer.as_tile_bytes() };
+        Ok(process(tile_bytes))
     }
 }
 
@@ -322,15 +355,7 @@ impl<const MUT: bool> TarballTileProvider<MUT, false> {
         &self,
         graph_id: GraphId,
     ) -> Result<MmapTilePointer, GraphTileProviderError> {
-        let base_graph_id = graph_id.tile_base_id();
-        let Some(offsets) = self.tile_index.get(&base_graph_id) else {
-            return Err(GraphTileProviderError::TileDoesNotExist);
-        };
-
-        Ok(MmapTilePointer {
-            mmap: self.mmap.clone(),
-            offsets: *offsets,
-        })
+        self.tile_pointer(graph_id)
     }
 }
 
