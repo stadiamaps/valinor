@@ -1,9 +1,12 @@
 #![doc = include_str!("../README.md")]
 
+pub mod extract;
 mod graph_id;
 pub mod graph_tile;
 pub mod shape_codec;
 pub mod spatial;
+#[cfg(test)]
+mod test_fixtures;
 pub mod tile_hierarchy;
 pub mod tile_provider;
 pub mod traffic_tile;
@@ -19,7 +22,7 @@ use serde::{Deserialize, Serialize};
 // The implementations are sufficiently complex that we want to have lots of files,
 // But many of those only have one or two useful definitions to re-export,
 // so this flattens things for better ergonomics.
-pub use graph_id::GraphId;
+pub use graph_id::{GraphId, InvalidGraphIdError, ParseGraphIdError};
 
 /// Road class; broad hierarchies of relative (and sometimes locally specific) importance.
 ///

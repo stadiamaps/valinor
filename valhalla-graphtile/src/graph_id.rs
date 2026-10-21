@@ -1,4 +1,5 @@
 use crate::tile_hierarchy::{STANDARD_LEVELS, TRANSIT_LEVEL};
+use core::str::FromStr;
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
 use std::fmt::{Display, Formatter};
@@ -35,6 +36,31 @@ pub enum InvalidGraphIdError {
     TileIndex,
     #[error("Graph ID is invalid")]
     InvalidGraphId,
+}
+
+/// The reasons why a string is not a valid graph ID or tile.
+#[derive(Debug, Error, PartialEq)]
+pub enum ParseGraphIdError {
+    /// The input does not have the expected number of `/`-separated components.
+    #[error("'{input}' is not in the {expected} form")]
+    Format {
+        input: String,
+        /// The expected form (e.g. `level/tile_id`).
+        expected: &'static str,
+    },
+    /// A component of the input is not a non-negative integer.
+    #[error("the {component} in '{input}' is not a valid number")]
+    Component {
+        input: String,
+        /// The name of the component (e.g. `level`).
+        component: &'static str,
+    },
+    /// The components are numbers, but they do not make a valid graph ID.
+    #[error("'{input}' is not a valid graph ID: {source}")]
+    Invalid {
+        input: String,
+        source: InvalidGraphIdError,
+    },
 }
 
 /// An Identifier of a node or an edge within the tiled, hierarchical graph.
@@ -209,19 +235,38 @@ impl GraphId {
         GraphId(U64::<LE>::new(self.value() & 0x01ff_ffff))
     }
 
-    /// Constructs a relative path for the given tile.
+    /// Parses the base graph ID of a tile from `level/tile_id` (e.g. `2/762485`).
+    ///
+    /// Whitespace around each component is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `input` does not have two `/`-separated components,
+    /// if a component is not a non-negative integer,
+    /// or if the level or the tile ID is out of range.
+    pub fn parse_tile(input: &str) -> Result<Self, ParseGraphIdError> {
+        let [level, tile_id] = parse_components(input, "level/tile_id", ["level", "tile ID"])?;
+        components_to_graph_id(input, level, tile_id, 0)
+    }
+
+    /// Returns the relative path of the tile file for this graph ID,
+    /// with `/` separators on every platform (e.g. `2/000/762/485.gph`).
+    ///
+    /// Valhalla uses this path in tile directories and extract tarballs.
+    /// The feature index is not part of the path.
     ///
     /// # Errors
     ///
     /// This will fail if the tile is invalid for this level of tiling.
     /// TODO: It seems like we could do this check at tile creation time?
-    pub fn file_path(&self, extension: &str) -> Result<PathBuf, InvalidGraphIdError> {
-        // This is quite ugly and prone to failure; this is a pretty literal C++ translation
+    pub fn relative_path(&self, extension: &str) -> Result<String, InvalidGraphIdError> {
         let level_number = self.level();
         let level = if level_number == TRANSIT_LEVEL.level {
             &*TRANSIT_LEVEL
         } else {
-            &STANDARD_LEVELS[level_number as usize]
+            STANDARD_LEVELS
+                .get(level_number as usize)
+                .ok_or(InvalidGraphIdError::Level)?
         };
 
         let max_id = level.tiling_system.n_cols * level.tiling_system.n_rows - 1;
@@ -230,26 +275,101 @@ impl GraphId {
             return Err(InvalidGraphIdError::GraphTileId);
         }
 
-        let l = max_id.max(1).ilog10() + 1;
-        let rem = l % 3;
-        let n_digits = if rem == 0 { l } else { l + (3 - rem) };
-        debug_assert!(n_digits % 3 == 0);
+        // The width of the largest tile ID of the level, rounded up to a whole number of groups.
+        let n_digits = (max_id.max(1).ilog10() + 1).next_multiple_of(3) as usize;
+        let padded_id = format!("{tile_id:0>n_digits$}");
 
-        // This may not be as efficient as the Valhalla implementation, but it's more readable.
-        // Format tile_id with leading zeros to match max_length
-        let padded_id = format!("{:0>width$}", tile_id, width = n_digits as usize);
-        let tile_id_chars: Vec<_> = padded_id.chars().collect();
-        // Create the final path using groups of threes
-        let tile_id_component = tile_id_chars
-            .rchunks(3)
-            .fold(PathBuf::new(), |acc, chunk| {
-                PathBuf::from(chunk.iter().collect::<String>()).join(acc)
-            })
-            .with_extension(extension);
+        let mut path = level_number.to_string();
+        // The padded ID is ASCII, and its length is a multiple of 3.
+        for group_start in (0..n_digits).step_by(3) {
+            path.push('/');
+            path.push_str(&padded_id[group_start..group_start + 3]);
+        }
+        if !extension.is_empty() {
+            path.push('.');
+            path.push_str(extension);
+        }
 
-        // Build and return the final string
-        Ok(PathBuf::from(self.level().to_string()).join(tile_id_component))
+        Ok(path)
     }
+
+    /// Returns [`GraphId::relative_path`] as a [`PathBuf`], with the separators of the platform.
+    ///
+    /// # Errors
+    ///
+    /// This will fail if the tile is invalid for this level of tiling.
+    pub fn file_path(&self, extension: &str) -> Result<PathBuf, InvalidGraphIdError> {
+        Ok(self.relative_path(extension)?.split('/').collect())
+    }
+}
+
+impl FromStr for GraphId {
+    type Err = ParseGraphIdError;
+
+    /// Parses a graph ID from its packed `u64` value (e.g. `16889572344463360`)
+    /// or from the `level/tile_id/index` form (e.g. `2/762485/42`).
+    ///
+    /// To parse a whole tile in the `level/tile_id` form, use [`GraphId::parse_tile`].
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        if let Ok(id) = input.trim().parse::<u64>() {
+            return GraphId::try_from_id(id).map_err(|source| ParseGraphIdError::Invalid {
+                input: input.to_string(),
+                source,
+            });
+        }
+
+        let [level, tile_id, index] = parse_components(
+            input,
+            "level/tile_id/index",
+            ["level", "tile ID", "feature index"],
+        )?;
+        components_to_graph_id(input, level, tile_id, index)
+    }
+}
+
+/// Splits `input` into exactly `N` `/`-separated integer components.
+fn parse_components<const N: usize>(
+    input: &str,
+    expected: &'static str,
+    names: [&'static str; N],
+) -> Result<[u64; N], ParseGraphIdError> {
+    let format_error = || ParseGraphIdError::Format {
+        input: input.to_string(),
+        expected,
+    };
+
+    let mut parts = input.split('/');
+    let mut values = [0; N];
+    for (value, component) in values.iter_mut().zip(names) {
+        let part = parts.next().ok_or_else(format_error)?;
+        *value = part
+            .trim()
+            .parse()
+            .map_err(|_| ParseGraphIdError::Component {
+                input: input.to_string(),
+                component,
+            })?;
+    }
+    if parts.next().is_some() {
+        return Err(format_error());
+    }
+
+    Ok(values)
+}
+
+/// Converts parsed components into a graph ID, and reports range errors against `input`.
+fn components_to_graph_id(
+    input: &str,
+    level: u64,
+    tile_id: u64,
+    index: u64,
+) -> Result<GraphId, ParseGraphIdError> {
+    let invalid = |source| ParseGraphIdError::Invalid {
+        input: input.to_string(),
+        source,
+    };
+    let level = u8::try_from(level).map_err(|_| invalid(InvalidGraphIdError::Level))?;
+    GraphId::try_from_components(level, tile_id, index).map_err(invalid)
 }
 
 impl Ord for GraphId {
@@ -421,6 +541,154 @@ mod tests {
                 .unwrap()
                 .file_path("gph"),
             Ok("3/001/000/000.gph".into())
+        );
+    }
+
+    fn tile(level: u8, tile_id: u64) -> GraphId {
+        GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
+    }
+
+    #[test]
+    fn test_relative_path() {
+        // Levels 0 and 1 pad the tile ID to 6 digits, and level 2 pads it to 9.
+        for (graph_id, expected) in [
+            (tile(0, 3015), "0/003/015.gph"),
+            (tile(0, 49), "0/000/049.gph"),
+            (tile(1, 47_701), "1/047/701.gph"),
+            (tile(1, 0), "1/000/000.gph"),
+            (tile(2, 762_485), "2/000/762/485.gph"),
+            (tile(2, 1_036_799), "2/001/036/799.gph"),
+        ] {
+            assert_eq!(graph_id.relative_path("gph").as_deref(), Ok(expected));
+            assert_eq!(
+                graph_id.file_path("gph"),
+                Ok(expected.split('/').collect::<PathBuf>())
+            );
+        }
+
+        let with_index = GraphId::try_from_components(2, 762_485, 42).unwrap();
+        assert_eq!(
+            with_index.relative_path("gph").as_deref(),
+            Ok("2/000/762/485.gph")
+        );
+
+        assert_eq!(
+            tile(1, 47_701).relative_path("").as_deref(),
+            Ok("1/047/701")
+        );
+    }
+
+    #[test]
+    fn test_relative_path_invalid() {
+        // Level 0 has 45 × 90 tiles, so its largest tile ID is 4049.
+        assert_eq!(
+            tile(0, 4049).relative_path("gph").as_deref(),
+            Ok("0/004/049.gph")
+        );
+        assert_eq!(
+            tile(0, 4050).relative_path("gph"),
+            Err(InvalidGraphIdError::GraphTileId)
+        );
+        // Levels 4 to 7 fit in the bit field, but they have no tiling system.
+        assert_eq!(
+            tile(5, 0).relative_path("gph"),
+            Err(InvalidGraphIdError::Level)
+        );
+    }
+
+    #[test]
+    fn test_parse_tile() {
+        assert_eq!(GraphId::parse_tile("2/763926"), Ok(tile(2, 763_926)));
+        assert_eq!(GraphId::parse_tile(" 0 / 3015 "), Ok(tile(0, 3015)));
+    }
+
+    #[test]
+    fn test_parse_tile_invalid() {
+        let format = |input: &str| ParseGraphIdError::Format {
+            input: input.to_string(),
+            expected: "level/tile_id",
+        };
+        assert_eq!(GraphId::parse_tile("2"), Err(format("2")));
+        assert_eq!(GraphId::parse_tile("2/763926/7"), Err(format("2/763926/7")));
+        assert_eq!(
+            GraphId::parse_tile("2/"),
+            Err(ParseGraphIdError::Component {
+                input: "2/".to_string(),
+                component: "tile ID",
+            })
+        );
+        assert_eq!(
+            GraphId::parse_tile("x/763926"),
+            Err(ParseGraphIdError::Component {
+                input: "x/763926".to_string(),
+                component: "level",
+            })
+        );
+        assert_eq!(
+            GraphId::parse_tile("-1/0"),
+            Err(ParseGraphIdError::Component {
+                input: "-1/0".to_string(),
+                component: "level",
+            })
+        );
+        // Levels have 3 bits, and tile IDs have 22 bits.
+        for (input, source) in [
+            ("8/0", InvalidGraphIdError::Level),
+            ("256/0", InvalidGraphIdError::Level),
+            ("0/4194304", InvalidGraphIdError::GraphTileId),
+        ] {
+            assert_eq!(
+                GraphId::parse_tile(input),
+                Err(ParseGraphIdError::Invalid {
+                    input: input.to_string(),
+                    source,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_str() {
+        let expected = GraphId::try_from_components(2, 762_485, 42).unwrap();
+        assert_eq!("2/762485/42".parse(), Ok(expected));
+        assert_eq!(expected.value().to_string().parse(), Ok(expected));
+        assert_eq!(
+            " 16889572344463360 "
+                .parse::<GraphId>()
+                .map(|id| id.value()),
+            Ok(16_889_572_344_463_360)
+        );
+    }
+
+    #[test]
+    fn test_from_str_invalid() {
+        assert_eq!(
+            "2/762485".parse::<GraphId>(),
+            Err(ParseGraphIdError::Format {
+                input: "2/762485".to_string(),
+                expected: "level/tile_id/index",
+            })
+        );
+        assert_eq!(
+            "2/762485/x".parse::<GraphId>(),
+            Err(ParseGraphIdError::Component {
+                input: "2/762485/x".to_string(),
+                component: "feature index",
+            })
+        );
+        assert_eq!(
+            INVALID_GRAPH_ID.to_string().parse::<GraphId>(),
+            Err(ParseGraphIdError::Invalid {
+                input: INVALID_GRAPH_ID.to_string(),
+                source: InvalidGraphIdError::InvalidGraphId,
+            })
+        );
+        assert_eq!(
+            "0/0/2097152".parse::<GraphId>(),
+            Err(ParseGraphIdError::Invalid {
+                input: "0/0/2097152".to_string(),
+                source: InvalidGraphIdError::TileIndex,
+            })
         );
     }
 }
