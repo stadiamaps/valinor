@@ -1,0 +1,32 @@
+info:
+  name: andorra-la-vella-to-la-massana-auto
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{baseUrl}}/route"
+  body:
+    type: json
+    data: |-
+      {
+        "locations": [
+          {
+            "lat": 42.5078,
+            "lon": 1.5211
+          },
+          {
+            "lat": 42.5449,
+            "lon": 1.5148
+          }
+        ],
+        "costing": "auto",
+        "units": "kilometers"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

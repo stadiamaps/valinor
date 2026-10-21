@@ -26,6 +26,10 @@ use crate::graph_tile::{
 pub use directory::DirectoryGraphTileProvider;
 pub use iterators::GraphSearchResult;
 use iterators::ResultsWithinRadius;
+pub(crate) use tarball::{INDEX_BIN_ENTRY_NAME, INDEX_ENTRY_SIZE, TAR_BLOCK_SIZE};
+
+/// The extension of graph tile files, in tile directories and in extract tarballs.
+pub(crate) const TILE_FILE_EXTENSION: &str = "gph";
 pub use tarball::{
     InvalidIndexBinError, TarballTileProvider, TileIndexBinEntry, parse_index_bin,
     serialize_index_bin,
@@ -54,6 +58,32 @@ pub enum GraphTileProviderError {
     InvalidIndexBin(#[from] InvalidIndexBinError),
     #[error("Unsupported tile version; this may or may not be compatible.")]
     UnsupportedTileVersion,
+    #[error("the tile file for {graph_id} has {size} bytes, which is more than a tile can have")]
+    TileTooLarge { graph_id: GraphId, size: u64 },
+}
+
+/// Access to the raw bytes of graph tiles, for code that copies tiles verbatim.
+pub trait TileBytesSource {
+    /// The error type of this source.
+    type Error: core::error::Error + 'static;
+
+    /// Returns the size in bytes of the tile that contains `graph_id`,
+    /// or [`None`] if the source does not contain the tile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot find out whether it contains the tile.
+    fn tile_size(&self, graph_id: GraphId) -> Result<Option<u32>, Self::Error>;
+
+    /// Calls `process` with the raw bytes of the tile that contains `graph_id`,
+    /// and returns its result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source does not contain the tile, or if it cannot read the tile.
+    fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
+    where
+        F: FnOnce(&[u8]) -> T;
 }
 
 /// A generic trait for all graph tile providers.
@@ -519,13 +549,13 @@ impl<K: std::hash::Hash + Eq + Clone> LockTable<K> {
 mod tests {
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
+    use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
     use crate::tile_provider::{DirectoryGraphTileProvider, GraphTileProvider};
     use geo::{Destination, HasDimensions, Haversine, LineString, Validation, coord, point};
     use rand::rngs::ThreadRng;
     use rand::{Rng, rng};
     use std::num::NonZeroUsize;
-    use std::path::PathBuf;
 
     #[test]
     fn haversine_antimeridian_wraps() {
@@ -544,9 +574,7 @@ mod tests {
     fn test_nodes_within_radius() {
         let mut rng = rng();
 
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         provider.with_tile_containing_or_panic(graph_id, |tile_view| {
@@ -665,9 +693,7 @@ mod tests {
 
     #[test]
     fn test_edges_within_radius_level0() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         sanity_check_edges_within_radius(provider, graph_id, rng());
@@ -675,9 +701,7 @@ mod tests {
 
     #[test]
     fn test_edges_within_radius_level2() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap());
         // Use a known level 2 tile from fixtures to exercise edge bins path
         let graph_id =

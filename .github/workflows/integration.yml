@@ -1,0 +1,50 @@
+# Integration tests of offline extracts with C++ Valhalla. See scripts/integration/README.md.
+name: Integration
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "valhalla-graphtile/src/extract/**"
+      # The tar layout and the index.bin code are in the tile providers.
+      - "valhalla-graphtile/src/tile_provider/**"
+      - "valinor-cli/**"
+      - "scripts/integration/**"
+      - ".github/workflows/integration.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The Valhalla release under test. Without this pin, the harness uses `latest`.
+  # When you change it, examine the differences in the responses and logs before you merge.
+  VALHALLA_VERSION: "3.8.2"
+
+jobs:
+  integration:
+    # Linux only: the job tests the Docker image, not the platform.
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: astral-sh/setup-uv@v10.3.0
+
+    - name: Check the harness
+      working-directory: scripts/integration
+      run: |
+        uv run --locked ruff check
+        uv run --locked ruff format --check
+        uv run --locked pytest
+
+    - name: Run the integration tests with C++ Valhalla
+      run: uv run --locked --project scripts/integration valinor-integration
+
+    - name: Upload harness artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-workdir
+        path: |
+          target/integration/responses
+          target/integration/valhalla-*.log
+          target/integration/valhalla.json
