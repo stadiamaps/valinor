@@ -73,6 +73,36 @@ mod tests {
     }
 
     #[test]
+    fn extract_tiles_reject_malformed_values() {
+        for input in ["2", "2/763926/7", "2/abc", "8/0"] {
+            let error = Cli::try_parse_from([
+                "valinor-cli",
+                "extract",
+                "in.tar",
+                "out.tar",
+                "--tile",
+                input,
+            ])
+            .expect_err("a malformed tile is rejected");
+            // The error from GraphId::parse_tile names the bad value.
+            assert!(error.to_string().contains(input), "{input}: {error}");
+        }
+    }
+
+    #[test]
+    fn get_edge_accepts_both_graph_id_forms() {
+        let expected = GraphId::try_from_components(2, 762_485, 42).expect("valid graph ID");
+        for input in [expected.value().to_string(), "2/762485/42".to_string()] {
+            let cli = Cli::try_parse_from(["valinor-cli", "get-edge", "valhalla.json", &input])
+                .expect("the arguments parse");
+            let Commands::GetEdge(args) = cli.command else {
+                panic!("expected the get-edge subcommand");
+            };
+            assert_eq!(args.graph_id, expected);
+        }
+    }
+
+    #[test]
     fn extract_tiles_are_required() {
         assert!(Cli::try_parse_from(["valinor-cli", "extract", "in.tar", "out.tar"]).is_err());
     }

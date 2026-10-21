@@ -3,7 +3,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 use anyhow::{Context, anyhow};
@@ -24,28 +23,8 @@ pub(crate) struct GetEdgeArgs {
     #[arg(env)]
     valhalla_config: PathBuf,
 
-    /// Graph ID (u64) or slash-form level/tile/index
-    graph_id: String,
-}
-
-fn parse_graph_id(input: &str) -> anyhow::Result<GraphId> {
-    // Try to parse as a pure integer.
-    if let Ok(id) = input.parse::<u64>() {
-        return GraphId::try_from_id(id).map_err(|e| anyhow!(e));
-    }
-
-    // Try slash-separated level/tile/index
-    let parts: Vec<&str> = input.split('/').collect();
-    if parts.len() == 3 {
-        let level = u8::from_str(parts[0]).context("invalid level in graph id")?;
-        let tile_id = u64::from_str(parts[1]).context("invalid tile id in graph id")?;
-        let index = u64::from_str(parts[2]).context("invalid index in graph id")?;
-        return GraphId::try_from_components(level, tile_id, index).map_err(|e| anyhow!(e));
-    }
-
-    Err(anyhow!(
-        "Unrecognized graph id format. Use a u64 integer or level/tile/index"
-    ))
+    /// Graph ID (u64) or slash-form level/tile_id/index
+    pub(crate) graph_id: GraphId,
 }
 
 #[derive(Debug, Clone)]
@@ -113,7 +92,7 @@ fn pretty_print_edge_info<T: GraphTileProvider>(
 
 /// Runs the `get-edge` subcommand.
 pub(crate) fn run(args: &GetEdgeArgs) -> anyhow::Result<()> {
-    let gid = parse_graph_id(&args.graph_id)?;
+    let gid = args.graph_id;
     let sources = parse_valhalla_data_paths(&args.valhalla_config)?;
     let traffic_extract = if let Some(path) = sources.traffic_extract {
         info!(path = path.to_str(), "Using traffic extract");

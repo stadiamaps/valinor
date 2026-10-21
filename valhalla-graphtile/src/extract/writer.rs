@@ -89,7 +89,7 @@ pub enum ExtractWriteError<E = GraphTileProviderError> {
     #[error("invalid extract: {0}")]
     Layout(#[from] ExtractLayoutError),
     /// A requested tile is not in the source.
-    #[error("tile {0} is not in the source extract")]
+    #[error("tile {0} is not in the source")]
     MissingTile(GraphId),
     /// A requested graph ID cannot be converted into a tar entry path.
     #[error("invalid graph ID: {0}")]
