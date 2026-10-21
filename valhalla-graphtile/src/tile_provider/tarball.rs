@@ -481,7 +481,7 @@ pub struct TileIndexBinEntry {
 }
 
 /// The size of one [`TileIndexBinEntry`] in bytes.
-const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
+pub(crate) const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
 
 /// The block size of a tar archive.
 ///

@@ -4,7 +4,9 @@ use crate::graph_tile::{GraphTileBuildError, GraphTileBuilder};
 use crate::graph_tile::{GraphTileView, handles::OwnedGraphTileHandle};
 use crate::spatial::bbox_with_center;
 use crate::tile_hierarchy::STANDARD_LEVELS;
-use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, LockTable, TileBytesSource};
+use crate::tile_provider::{
+    GraphTileProvider, GraphTileProviderError, LockTable, TILE_FILE_EXTENSION, TileBytesSource,
+};
 use geo::{CoordFloat, Point};
 use lru::LruCache;
 use num_traits::FromPrimitive;
@@ -124,7 +126,9 @@ impl DirectoryGraphTileProvider {
     ///
     /// NOTE: This function assumes that the graph ID is already a base ID.
     fn path_for_graph_id(&self, graph_id: GraphId) -> Result<PathBuf, InvalidGraphIdError> {
-        Ok(self.base_directory.join(graph_id.file_path("gph")?))
+        Ok(self
+            .base_directory
+            .join(graph_id.file_path(TILE_FILE_EXTENSION)?))
     }
 
     /// Reads all bytes of the tile file for the given base graph ID.

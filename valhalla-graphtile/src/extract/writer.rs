@@ -37,8 +37,8 @@
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
 use crate::tile_provider::{
-    GraphTileProviderError, INDEX_BIN_ENTRY_NAME, InvalidIndexBinError, TAR_BLOCK_SIZE,
-    TileBytesSource, TileIndexBinEntry, serialize_index_bin,
+    GraphTileProviderError, INDEX_BIN_ENTRY_NAME, INDEX_ENTRY_SIZE, InvalidIndexBinError,
+    TAR_BLOCK_SIZE, TILE_FILE_EXTENSION, TileBytesSource, TileIndexBinEntry, serialize_index_bin,
 };
 use std::io::Write;
 use tar::{EntryType, Header};
@@ -51,9 +51,6 @@ const ZERO_BLOCK: [u8; TAR_BLOCK_SIZE as usize] = [0; TAR_BLOCK_SIZE as usize];
 
 /// The length of the end-of-archive marker: two zero blocks.
 const END_OF_ARCHIVE_LEN: u64 = 2 * TAR_BLOCK_SIZE;
-
-/// The extension of graph tile files.
-const TILE_EXTENSION: &str = "gph";
 
 /// An error in the set of tiles of an extract.
 ///
@@ -228,7 +225,7 @@ impl ExtractLayout {
         // The archive is a sequence of entries, and `index.bin` is the first entry (at offset 0).
         // `next_entry_offset` is the offset of the header block of the next entry;
         // the payload of that entry starts one block later.
-        let index_len = (size_of::<TileIndexBinEntry>() * sorted.len()) as u64;
+        let index_len = (INDEX_ENTRY_SIZE * sorted.len()) as u64;
         let mut next_entry_offset = entry_len(index_len);
 
         let mut entries = Vec::with_capacity(sorted.len());
@@ -302,7 +299,7 @@ where
     for entry in layout.index_entries() {
         // Infallible in practice: the layout was constructed from valid base tile IDs.
         let graph_id = entry.graph_id().map_err(ExtractLayoutError::from)?;
-        let path = graph_id.relative_path(TILE_EXTENSION)?;
+        let path = graph_id.relative_path(TILE_FILE_EXTENSION)?;
         let expected = entry.size();
 
         source
@@ -742,7 +739,7 @@ mod tests {
             for (index_entry, (path, payload_offset)) in layout.index_entries().iter().zip(&entries[1..]) {
                 let graph_id = index_entry.graph_id().expect("the entry ID is valid");
                 prop_assert_eq!(index_entry.offset(), *payload_offset);
-                prop_assert_eq!(path, &graph_id.relative_path(TILE_EXTENSION).expect("valid tile"));
+                prop_assert_eq!(path, &graph_id.relative_path(TILE_FILE_EXTENSION).expect("valid tile"));
                 prop_assert!(index_entry.offset().is_multiple_of(TAR_BLOCK_SIZE));
             }
         }
