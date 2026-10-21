@@ -665,6 +665,7 @@ where
 mod tests {
     use crate::graph_tile::predicted_speeds::COEFFICIENT_COUNT;
     use crate::graph_tile::{GraphTileBuilder, GraphTileHeader, OwnedGraphTileHandle};
+    use crate::test_fixtures;
     use std::path::Path;
     use walkdir::WalkDir;
 
@@ -709,9 +710,7 @@ mod tests {
 
     #[test]
     fn round_trip_from_builder_without_changes() {
-        let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base_dir = test_fixtures::andorra_tiles_dir();
         for entry in WalkDir::new(base_dir) {
             let entry = entry.expect("Unable to traverse directory");
 
@@ -733,9 +732,7 @@ mod tests {
 
     #[test]
     fn round_trip_from_builder_without_changes_including_traffic() {
-        let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles-with-traffic");
+        let base_dir = test_fixtures::andorra_tiles_with_traffic_dir();
         for entry in WalkDir::new(base_dir) {
             let entry = entry.expect("Unable to traverse directory");
 
@@ -757,9 +754,7 @@ mod tests {
 
     #[test]
     fn add_predicted_speeds() {
-        let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base_dir = test_fixtures::andorra_tiles_dir();
 
         let in_bytes = std::fs::read(base_dir.join("0").join("003").join("015.gph"))
             .expect("Unable to read file");
@@ -782,9 +777,7 @@ mod tests {
             .with_predicted_encoded_speeds(42, "BcUACQAEACEADP/7/9sAGf/fAAwAGwARAAX/+AAAAB0AFAAS//AAF//+ACwACQAqAAAAKP/6AEMABABsAAsBBAAq/rcAAP+bAAz/zv/s/9MABf/Y//X/8//9/+wACf/P//EADv/8//L//P/y//H////7AAwAFf/5//oADgAZAAQAFf/3/+8AB//yAB8ABv/0AAUAEf/8//QAFAAG//b////j//v//QAT//7/+f/kABMABwABAAv/6//8//cAEwAAABT/8v/6//wAAAAQ//cACwAFAAT/1//sAAEADAABAAYAE//9AAn/7gAH/+AAFQAB//4AC//o/+gAE//+AAAAFf/l//kABP/+//kACAAG//cAHv/qAB0AAv/4/+v/+wALAAMABP/3AAT/8wAIAAr/9wAK//j/+wAEAAD/+P/8//v/8f/2//L//AALAAcABgAG//gAAv/5AAoAHv//AAcAFf/zABD/7AAUAAv/7v/8AAgACAAN//0ADP/iABD/9f/3//7/+P/3AAQADP//AAMABw==").unwrap()
             .into_bytes().unwrap();
 
-        let base_dir_with_traffic = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles-with-traffic");
+        let base_dir_with_traffic = test_fixtures::andorra_tiles_with_traffic_dir();
         let expected_out_bytes =
             std::fs::read(base_dir_with_traffic.join("0").join("003").join("015.gph"))
                 .expect("Unable to read file");
@@ -798,9 +791,7 @@ mod tests {
 
     #[test]
     fn predicted_speeds_deduplication() {
-        let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base_dir = test_fixtures::andorra_tiles_dir();
 
         let in_bytes = std::fs::read(base_dir.join("0").join("003").join("015.gph"))
             .expect("Unable to read file");

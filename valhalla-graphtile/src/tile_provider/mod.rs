@@ -519,13 +519,13 @@ impl<K: std::hash::Hash + Eq + Clone> LockTable<K> {
 mod tests {
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
+    use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
     use crate::tile_provider::{DirectoryGraphTileProvider, GraphTileProvider};
     use geo::{Destination, HasDimensions, Haversine, LineString, Validation, coord, point};
     use rand::rngs::ThreadRng;
     use rand::{Rng, rng};
     use std::num::NonZeroUsize;
-    use std::path::PathBuf;
 
     #[test]
     fn haversine_antimeridian_wraps() {
@@ -544,9 +544,7 @@ mod tests {
     fn test_nodes_within_radius() {
         let mut rng = rng();
 
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         provider.with_tile_containing_or_panic(graph_id, |tile_view| {
@@ -665,9 +663,7 @@ mod tests {
 
     #[test]
     fn test_edges_within_radius_level0() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         sanity_check_edges_within_radius(provider, graph_id, rng());
@@ -675,9 +671,7 @@ mod tests {
 
     #[test]
     fn test_edges_within_radius_level2() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(4).unwrap());
         // Use a known level 2 tile from fixtures to exercise edge bins path
         let graph_id =
