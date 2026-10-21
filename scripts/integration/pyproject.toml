@@ -1,0 +1,33 @@
+[project]
+name = "valinor-integration"
+version = "0.1.0"
+description = "Integration tests of Valinor tile extracts with stock C++ Valhalla"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "docker>=7.2.0",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+valinor-integration = "valinor_integration.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.29,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
