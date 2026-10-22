@@ -1,4 +1,4 @@
-use crate::tile_hierarchy::{STANDARD_LEVELS, TRANSIT_LEVEL};
+use crate::tile_hierarchy::tile_level;
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
 use std::fmt::{Display, Formatter};
@@ -44,8 +44,8 @@ pub enum InvalidGraphIdError {
 /// # Hierarchy (level + Tile ID)
 ///
 /// Valhalla organizes tiles into several levels.
-/// For a description of the common ones, see [`STANDARD_LEVELS`]
-/// and [`TRANSIT_LEVEL`].
+/// For a description of the common ones, see [`STANDARD_LEVELS`](crate::tile_hierarchy::STANDARD_LEVELS)
+/// and [`TRANSIT_LEVEL`](crate::tile_hierarchy::TRANSIT_LEVEL).
 /// Each level includes progressively more "local" roads.
 /// This helps improve efficiency.
 ///
@@ -213,16 +213,12 @@ impl GraphId {
     ///
     /// # Errors
     ///
-    /// This will fail if the tile is invalid for this level of tiling.
+    /// This will fail if the level is not a standard level or the transit level,
+    /// or if the tile is invalid for this level of tiling.
     /// TODO: It seems like we could do this check at tile creation time?
     pub fn file_path(&self, extension: &str) -> Result<PathBuf, InvalidGraphIdError> {
         // This is quite ugly and prone to failure; this is a pretty literal C++ translation
-        let level_number = self.level();
-        let level = if level_number == TRANSIT_LEVEL.level {
-            &*TRANSIT_LEVEL
-        } else {
-            &STANDARD_LEVELS[level_number as usize]
-        };
+        let level = tile_level(self.level()).ok_or(InvalidGraphIdError::Level)?;
 
         let max_id = level.tiling_system.n_cols * level.tiling_system.n_rows - 1;
         let tile_id = self.tile_id();
@@ -422,5 +418,17 @@ mod tests {
                 .file_path("gph"),
             Ok("3/001/000/000.gph".into())
         );
+    }
+
+    #[test]
+    fn test_graph_id_file_path_unknown_level() {
+        for level in 4..=MAX_HIERARCHY_LEVEL {
+            assert_eq!(
+                GraphId::try_from_components(level, 0, 0)
+                    .unwrap()
+                    .file_path("gph"),
+                Err(InvalidGraphIdError::Level)
+            );
+        }
     }
 }

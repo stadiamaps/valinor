@@ -204,6 +204,21 @@ pub static TRANSIT_LEVEL: LazyLock<TileLevel> = LazyLock::new(|| TileLevel {
     ),
 });
 
+/// Gets the definition of hierarchy level `level`.
+///
+/// Returns `None` if `level` is not one of the [`STANDARD_LEVELS`] or the [`TRANSIT_LEVEL`].
+#[inline]
+#[must_use]
+pub fn tile_level(level: u8) -> Option<&'static TileLevel> {
+    if level == TRANSIT_LEVEL.level {
+        Some(&TRANSIT_LEVEL)
+    } else {
+        STANDARD_LEVELS
+            .iter()
+            .find(|tile_level| tile_level.level == level)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +392,19 @@ mod tests {
             base_tile_id(level, 1, 1),
             GraphId::try_from_components(1, 361, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn test_tile_level() {
+        for level in 0..=3 {
+            let tile_level = tile_level(level).expect("Missing tile level");
+            assert_eq!(tile_level.level, level);
+        }
+        assert_eq!(tile_level(2).map(|l| l.name), Some("local"));
+        assert_eq!(tile_level(3).map(|l| l.name), Some("transit"));
+
+        for level in 4..=u8::MAX {
+            assert!(tile_level(level).is_none(), "Unexpected tile level {level}");
+        }
     }
 }
