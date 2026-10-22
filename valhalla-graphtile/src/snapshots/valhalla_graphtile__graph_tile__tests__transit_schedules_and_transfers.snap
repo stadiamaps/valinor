@@ -1,0 +1,15 @@
+---
+source: valhalla-graphtile/src/graph_tile.rs
+expression: tile_view.transit_schedules
+---
+[
+    TransitSchedule {
+        days: U64(
+            281421784589072883,
+        ),
+        bitfield: ScheduleBitfield {
+            days_of_week: 62,
+            end_day: 59,
+        },
+    },
+]

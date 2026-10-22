@@ -200,10 +200,10 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
 #[cfg(test)]
 mod test {
     use super::DirectoryGraphTileProvider;
-    use crate::GraphId;
     use crate::graph_tile::GraphTile;
     use crate::tile_hierarchy::STANDARD_LEVELS;
     use crate::tile_provider::GraphTileProvider;
+    use crate::{GraphId, RoadUse};
     use core::num::NonZeroUsize;
     use rand::{
         distr::{Distribution, Uniform},
@@ -226,6 +226,48 @@ mod test {
         // Minimally test that we got the correct tile
         assert_eq!(tile.header().graph_id(), graph_id);
         assert_eq!(tile.header().graph_id().value(), graph_id.value());
+    }
+
+    #[test]
+    fn test_transit_connections_across_levels() {
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("andorra-transit-tiles");
+        let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(2).unwrap());
+        let transit_tile_id =
+            GraphId::try_from_components(3, 763_926, 0).expect("Unable to create graph ID");
+        let transit_tile = provider
+            .get_handle_for_tile_containing(transit_tile_id)
+            .expect("Unable to get transit tile");
+        assert_eq!(transit_tile.header().graph_id(), transit_tile_id);
+
+        // Each connection from a transit egress to a road has an opposing edge
+        // in the local tile that goes back to the transit tile.
+        let mut connection_count = 0;
+        for (index, edge) in transit_tile.directed_edges().iter().enumerate() {
+            if edge.road_use() != RoadUse::TransitConnection {
+                continue;
+            }
+            connection_count += 1;
+
+            let edge_id = transit_tile_id
+                .with_feature_index(index as u64)
+                .expect("Invalid graph ID");
+            let opp_edge_id = provider
+                .get_opposing_edge_id(edge_id, transit_tile.borrow_dependent())
+                .expect("Unable to get opposing edge");
+            assert_eq!(opp_edge_id.level(), 2);
+
+            let local_tile = provider
+                .get_handle_for_tile_containing(opp_edge_id)
+                .expect("Unable to get local tile");
+            let opp_edge = local_tile
+                .get_directed_edge(opp_edge_id)
+                .expect("Unable to get opposing edge");
+            assert_eq!(opp_edge.road_use(), RoadUse::TransitConnection);
+            assert!(transit_tile.may_contain_id(opp_edge.end_node_id()));
+        }
+        assert_eq!(connection_count, 8);
     }
 
     #[test]

@@ -1,0 +1,150 @@
+---
+source: valhalla-graphtile/src/graph_tile.rs
+expression: tile_view.transit_stops
+---
+[
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                6,
+            ),
+            name_offset: U32(
+                37,
+            ),
+            generated: 1,
+            traversability: 3,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                51,
+            ),
+            name_offset: U32(
+                37,
+            ),
+            generated: 1,
+            traversability: 0,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                83,
+            ),
+            name_offset: U32(
+                37,
+            ),
+            generated: 0,
+            traversability: 0,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                99,
+            ),
+            name_offset: U32(
+                130,
+            ),
+            generated: 1,
+            traversability: 3,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                142,
+            ),
+            name_offset: U32(
+                130,
+            ),
+            generated: 1,
+            traversability: 0,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                174,
+            ),
+            name_offset: U32(
+                130,
+            ),
+            generated: 0,
+            traversability: 0,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                190,
+            ),
+            name_offset: U32(
+                221,
+            ),
+            generated: 1,
+            traversability: 3,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                232,
+            ),
+            name_offset: U32(
+                221,
+            ),
+            generated: 1,
+            traversability: 0,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                264,
+            ),
+            name_offset: U32(
+                221,
+            ),
+            generated: 0,
+            traversability: 0,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                280,
+            ),
+            name_offset: U32(
+                311,
+            ),
+            generated: 1,
+            traversability: 3,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                320,
+            ),
+            name_offset: U32(
+                311,
+            ),
+            generated: 1,
+            traversability: 0,
+        },
+    },
+    TransitStop {
+        bitfield: StopBitfield {
+            one_stop_offset: U32(
+                352,
+            ),
+            name_offset: U32(
+                311,
+            ),
+            generated: 0,
+            traversability: 0,
+        },
+    },
+]

@@ -42,6 +42,7 @@ use crate::graph_tile::predicted_speeds::{
     COEFFICIENT_COUNT, PredictedSpeedCodecError, PredictedSpeeds,
 };
 use crate::spatial::DistanceApproximator;
+use crate::tile_hierarchy::tile_level;
 pub use crate::{
     Access,
     graph_id::{GraphId, InvalidGraphIdError},
@@ -258,8 +259,9 @@ pub trait GraphTile {
     ///
     /// # Panics
     ///
-    /// This function assumes that the level in the graph tile header is a standard Valhalla level.
-    /// Non-standard values will cause a panic.
+    /// This function assumes that the level in the graph tile header is a standard Valhalla level
+    /// or the transit level.
+    /// Other values will cause a panic.
     ///
     /// This function also assumes that the `x` and `y` values are within the accepted range
     /// (specifically, they must each be <= the square root of [`crate::BIN_COUNT`]).
@@ -484,9 +486,6 @@ pub struct GraphTileView<'a> {
     text_memory: &'a [u8],
     lane_connectivity_memory: &'a [u8],
     predicted_speeds: Option<PredictedSpeeds<'a>>,
-    // TODO: Stop one stops(?)
-    // TODO: Route one stops(?)
-    // TODO: Operator one stops(?)
 }
 
 impl GraphTile for GraphTileView<'_> {
@@ -651,12 +650,9 @@ impl GraphTile for GraphTileView<'_> {
         );
 
         let level = self.header.graph_id().level();
-        // Find the subdivision count for this level (defaults to 5 if unknown)
-        let n_subdivisions = crate::tile_hierarchy::STANDARD_LEVELS
-            .iter()
-            .find(|lvl| lvl.level == level)
-            .map(|lvl| lvl.tiling_system.n_subdivisions as usize)
-            .expect("Only Valhalla standard tile levels are supported");
+        let n_subdivisions = tile_level(level)
+            .map(|lvl| usize::from(lvl.tiling_system.n_subdivisions))
+            .expect("A decoded tile always has a known level");
         y * n_subdivisions + x
     }
 }
@@ -673,8 +669,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         })?;
 
         let level = header.graph_id().level();
-        if level > 2 {
-            // No transit tile support yet (see the end of this function for some more specific TODOs)
+        if tile_level(level).is_none() {
             return Err(GraphTileDecodingError::UnsupportedTileLevel(level));
         }
 
@@ -875,11 +870,6 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             (None, bytes)
         };
 
-        // TODO: Transit info
-        // - Stop one stops(?)
-        // - Route one stops(?)
-        // - Operator one stops(?)
-
         if bytes.is_empty() {
             Ok(Self {
                 header,
@@ -980,6 +970,39 @@ static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<OwnedGraphTileHandle> = LazyLock::new
     OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
 });
 
+/// The tile ID (at levels 2 and 3) of the tiles in the `andorra-transit-tiles` fixture.
+#[cfg(test)]
+const TEST_TRANSIT_FIXTURE_TILE_ID: u64 = 763_926;
+
+#[cfg(test)]
+fn transit_fixture_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("andorra-transit-tiles")
+}
+
+#[cfg(test)]
+fn load_transit_fixture_tile(level: u8) -> OwnedGraphTileHandle {
+    let relative_path = GraphId::try_from_components(level, TEST_TRANSIT_FIXTURE_TILE_ID, 0)
+        .expect("Invalid graph ID")
+        .file_path("gph")
+        .expect("Unable to get relative path");
+    let bytes =
+        std::fs::read(transit_fixture_dir().join(relative_path)).expect("Unable to read file");
+
+    OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
+}
+
+/// The local tile under [`TEST_TRANSIT_TILE_L3`], from the same build.
+#[cfg(test)]
+static TEST_TRANSIT_TILE_L2: LazyLock<OwnedGraphTileHandle> =
+    LazyLock::new(|| load_transit_fixture_tile(2));
+
+/// A transit tile that Valhalla 3.8.2 built from a small GTFS feed.
+#[cfg(test)]
+static TEST_TRANSIT_TILE_L3: LazyLock<OwnedGraphTileHandle> =
+    LazyLock::new(|| load_transit_fixture_tile(3));
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,10 +1010,13 @@ mod tests {
     use crate::graph_tile::predicted_speeds::BUCKETS_PER_WEEK;
     use crate::graph_tile::{
         GraphTile, TEST_GRAPH_TILE_ID_L0, TEST_GRAPH_TILE_L0, TEST_GRAPH_TILE_L2,
-        TEST_GRAPH_TILE_WITH_FLOW,
+        TEST_GRAPH_TILE_WITH_FLOW, TEST_TRANSIT_TILE_L2, TEST_TRANSIT_TILE_L3,
     };
+    use crate::{AsCowStr, RoadUse};
     use enumset::{EnumSet, enum_set};
     use rand::{Rng, rng};
+    use std::borrow::Cow;
+    use walkdir::WalkDir;
 
     #[test]
     fn test_get_opp_edge_index() {
@@ -1405,5 +1431,319 @@ mod tests {
                 "Expected all nodes to be within the search radius"
             );
         }
+    }
+
+    /// Values of the `node_type` field for transit nodes.
+    const TRANSIT_EGRESS_NODE_TYPE: u8 = 4;
+    const TRANSIT_STATION_NODE_TYPE: u8 = 5;
+    const TRANSIT_PLATFORM_NODE_TYPE: u8 = 6;
+
+    fn text_at<'a>(tile_view: &'a GraphTileView<'_>, offset: u32) -> Cow<'a, str> {
+        tile_view.text_memory[offset as usize..].as_cow_str()
+    }
+
+    #[test]
+    fn test_decode_all_transit_fixture_tiles() {
+        let transit_level_dir = transit_fixture_dir().join("3");
+        let mut tile_count = 0;
+        for entry in WalkDir::new(transit_level_dir) {
+            let entry = entry.expect("Unable to read fixture directory");
+            if entry.path().extension().is_none_or(|ext| ext != "gph") {
+                continue;
+            }
+
+            let bytes = std::fs::read(entry.path()).expect("Unable to read file");
+            let tile_view = GraphTileView::try_from(bytes.as_slice())
+                .unwrap_or_else(|e| panic!("Unable to decode {}: {e}", entry.path().display()));
+            let header = tile_view.header();
+            assert_eq!(header.graph_id().level(), 3);
+            assert_eq!(
+                tile_view.transit_departures.len(),
+                header.departure_count() as usize
+            );
+            assert_eq!(tile_view.transit_stops.len(), header.stop_count() as usize);
+            assert_eq!(
+                tile_view.transit_routes.len(),
+                header.route_count() as usize
+            );
+            assert_eq!(
+                tile_view.transit_schedules.len(),
+                header.schedule_count() as usize
+            );
+            assert_eq!(
+                tile_view.transit_transfers.len(),
+                header.transfer_count() as usize
+            );
+            tile_count += 1;
+        }
+
+        assert_eq!(tile_count, 1, "Expected one transit tile in the fixture");
+    }
+
+    #[test]
+    fn test_unsupported_tile_level() {
+        let mut bytes = TEST_TRANSIT_TILE_L3.borrow_owner().clone();
+        // The level is in the 3 low bits of the graph ID at the start of the header.
+        bytes[0] = (bytes[0] & !0b111) | 4;
+
+        assert!(matches!(
+            GraphTileView::try_from(bytes.as_slice()),
+            Err(GraphTileDecodingError::UnsupportedTileLevel(4))
+        ));
+    }
+
+    #[test]
+    fn test_transit_stops() {
+        let tile = &*TEST_TRANSIT_TILE_L3;
+        let tile_view = tile.borrow_dependent();
+        let sw = tile_view.header().sw_corner();
+
+        // Valhalla makes a station node and an egress node for each GTFS stop
+        // that has no parent station.
+        assert_eq!(tile_view.nodes().len(), 12);
+        assert_eq!(tile_view.transit_stops.len(), 12);
+
+        let mut platforms = Vec::new();
+        for node in tile_view.nodes() {
+            let stop = &tile_view.transit_stops[node.transition_index() as usize];
+            let name = text_at(tile_view, stop.name_offset());
+            let one_stop_id = text_at(tile_view, stop.one_stop_offset());
+            match node.node_type() {
+                TRANSIT_PLATFORM_NODE_TYPE => {
+                    assert!(!stop.generated());
+                    let coordinate = node.coordinate(sw);
+                    platforms.push((one_stop_id, name, coordinate.y, coordinate.x));
+                }
+                TRANSIT_STATION_NODE_TYPE => {
+                    assert!(stop.generated());
+                    assert!(one_stop_id.ends_with("_transit_station"));
+                }
+                TRANSIT_EGRESS_NODE_TYPE => {
+                    assert!(stop.generated());
+                    assert!(one_stop_id.ends_with("_transit_egress"));
+                }
+                other => panic!("Unexpected node type {other} in a transit tile"),
+            }
+        }
+        platforms.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // The stops in the GTFS feed that built the fixture
+        let expected = [
+            ("andorra-test_S1", "Plaça U", 42.50655, 1.52100),
+            ("andorra-test_S2", "Plaça Dos", 42.50655, 1.52300),
+            ("andorra-test_S3", "Plaça Tres", 42.50655, 1.52500),
+            ("andorra-test_S4", "Plaça Quatre", 42.50725, 1.52605),
+        ];
+        assert_eq!(platforms.len(), expected.len());
+        for ((one_stop_id, name, lat, lon), (exp_id, exp_name, exp_lat, exp_lon)) in
+            platforms.iter().zip(expected)
+        {
+            assert_eq!(one_stop_id, exp_id);
+            assert_eq!(name, exp_name);
+            // Node coordinates have 7 decimal digits, but f32 loses some of them at these values.
+            assert!(
+                (lat - exp_lat).abs() < 1e-5,
+                "{name}: lat {lat} != {exp_lat}"
+            );
+            assert!(
+                (lon - exp_lon).abs() < 1e-5,
+                "{name}: lon {lon} != {exp_lon}"
+            );
+        }
+
+        // insta internally does a fork operation, which is not supported under Miri
+        if !cfg!(miri) {
+            insta::assert_debug_snapshot!(tile_view.transit_stops);
+        }
+    }
+
+    #[test]
+    fn test_transit_routes() {
+        let tile = &*TEST_TRANSIT_TILE_L3;
+        let tile_view = tile.borrow_dependent();
+
+        // The route and the agency in the GTFS feed that built the fixture
+        let [route] = tile_view.transit_routes else {
+            panic!("Expected one route in the transit tile")
+        };
+        assert_eq!(text_at(tile_view, route.short_name_offset()), "L1");
+        assert_eq!(
+            text_at(tile_view, route.long_name_offset()),
+            "Línia de prova"
+        );
+        assert_eq!(
+            text_at(tile_view, route.description_offset()),
+            "Test route over the synthetic grid"
+        );
+        assert_eq!(
+            text_at(tile_view, route.one_stop_offset()),
+            "andorra-test_L1"
+        );
+        assert_eq!(
+            text_at(tile_view, route.operator_one_stop_offset()),
+            "andorra-test_VTA"
+        );
+        assert_eq!(
+            text_at(tile_view, route.operator_name_offset()),
+            "Valinor Test Agency"
+        );
+        assert_eq!(
+            text_at(tile_view, route.operator_website_offset()),
+            "https://example.com/valinor-test-agency"
+        );
+        // Bus
+        assert_eq!(route.route_type(), 3);
+        assert_eq!(route.route_color(), 0x00_55_A4);
+        assert_eq!(route.route_text_color(), 0xFF_FF_FF);
+
+        // insta internally does a fork operation, which is not supported under Miri
+        if !cfg!(miri) {
+            insta::assert_debug_snapshot!(tile_view.transit_routes);
+        }
+    }
+
+    #[test]
+    fn test_transit_departures() {
+        let tile = &*TEST_TRANSIT_TILE_L3;
+        let tile_view = tile.borrow_dependent();
+
+        let mut departures: Vec<_> = tile_view
+            .transit_departures
+            .iter()
+            .map(|departure| {
+                assert_eq!(departure.route_index(), 0);
+                assert!(
+                    usize::from(departure.schedule_index()) < tile_view.transit_schedules.len()
+                );
+                (
+                    departure.departure_time(),
+                    departure.elapsed_time(),
+                    departure.departure_type(),
+                    departure.end_time(),
+                    departure.frequency(),
+                    text_at(tile_view, departure.headsign_offset()),
+                    departure.wheelchair_accessible(),
+                    departure.bicycle_accessible(),
+                )
+            })
+            .collect();
+        departures.sort_by_key(|departure| departure.0);
+
+        // The trips in the GTFS feed that built the fixture.
+        // The last stop of each trip has no departure.
+        let fixed = |time, headsign, bicycle_accessible| {
+            let headsign = Cow::from(headsign);
+            (time, 120, 0, None, None, headsign, true, bicycle_accessible)
+        };
+        // Each stop of a frequency trip has the end time of the frequency entry.
+        let frequency = |time| {
+            let headsign = Cow::from("Plaça Quatre");
+            (
+                time,
+                120,
+                1,
+                Some(12 * 3600),
+                Some(900),
+                headsign,
+                false,
+                true,
+            )
+        };
+        let expected = vec![
+            fixed(8 * 3600, "Plaça Quatre", true),
+            fixed(8 * 3600 + 150, "Plaça Quatre", true),
+            fixed(8 * 3600 + 300, "Plaça Quatre", true),
+            fixed(8 * 3600 + 1800, "Plaça U", false),
+            fixed(8 * 3600 + 1920, "Plaça U", false),
+            fixed(8 * 3600 + 2040, "Plaça U", false),
+            frequency(9 * 3600),
+            frequency(9 * 3600 + 120),
+            frequency(9 * 3600 + 240),
+        ];
+        assert_eq!(departures, expected);
+
+        // insta internally does a fork operation, which is not supported under Miri
+        if !cfg!(miri) {
+            insta::assert_debug_snapshot!(tile_view.transit_departures);
+        }
+    }
+
+    #[test]
+    fn test_transit_schedules_and_transfers() {
+        let tile = &*TEST_TRANSIT_TILE_L3;
+        let tile_view = tile.borrow_dependent();
+
+        assert!(!tile_view.transit_schedules.is_empty());
+        for schedule in tile_view.transit_schedules {
+            // Monday to Friday, from the calendar of the GTFS feed
+            assert_eq!(schedule.days_of_week(), 0b011_1110);
+
+            // The day bits start at the build date, so check the weekly pattern only.
+            let end_day = u32::from(schedule.end_day());
+            assert!((6..64).contains(&end_day));
+            let days = schedule.days();
+            let is_valid = |day: u32| days & (1 << day) != 0;
+            assert_eq!((0..7).filter(|&day| is_valid(day)).count(), 5);
+            for day in 7..=end_day {
+                assert_eq!(is_valid(day), is_valid(day - 7), "Day {day}");
+            }
+            assert_eq!(days.checked_shr(end_day + 1).unwrap_or(0), 0);
+        }
+
+        // Valhalla does not write transfers into transit tiles
+        assert!(tile_view.transit_transfers.is_empty());
+
+        // insta internally does a fork operation, which is not supported under Miri
+        if !cfg!(miri) {
+            insta::assert_debug_snapshot!(tile_view.transit_schedules);
+        }
+    }
+
+    #[test]
+    fn test_transit_tile_bins() {
+        let tile = &*TEST_TRANSIT_TILE_L3;
+        let tile_view = tile.borrow_dependent();
+        assert_eq!(tile_view.edge_bins, []);
+
+        assert_eq!(tile_view.bin_index_xy(0, 0), 0);
+        assert_eq!(tile_view.bin_index_xy(1, 2), 11);
+        assert_eq!(tile_view.bin_index_xy(4, 4), crate::BIN_COUNT - 1);
+        for bin_index in 0..crate::BIN_COUNT {
+            assert_eq!(tile_view.edges_in_bin(bin_index), []);
+        }
+    }
+
+    #[test]
+    fn test_local_tile_from_transit_build() {
+        let local_tile = &*TEST_TRANSIT_TILE_L2;
+        let transit_tile = &*TEST_TRANSIT_TILE_L3;
+        assert_eq!(local_tile.header().graph_id().level(), 2);
+
+        // Valhalla connects each of the 4 transit egress nodes
+        // to both end nodes of the closest road edge, in both directions.
+        let mut egress_ids: Vec<_> = local_tile
+            .directed_edges()
+            .iter()
+            .filter(|edge| edge.road_use() == RoadUse::TransitConnection)
+            .map(|edge| {
+                let end_node = transit_tile
+                    .get_node(edge.end_node_id())
+                    .expect("A transit connection must end in the transit tile");
+                assert_eq!(end_node.node_type(), TRANSIT_EGRESS_NODE_TYPE);
+                edge.end_node_id()
+            })
+            .collect();
+        assert_eq!(egress_ids.len(), 8);
+        egress_ids.sort_by_key(GraphId::value);
+        egress_ids.dedup();
+        assert_eq!(egress_ids.len(), 4);
+
+        let egress_to_road = transit_tile
+            .directed_edges()
+            .iter()
+            .filter(|edge| edge.road_use() == RoadUse::TransitConnection)
+            .inspect(|edge| assert!(local_tile.may_contain_id(edge.end_node_id())))
+            .count();
+        assert_eq!(egress_to_road, 8);
     }
 }

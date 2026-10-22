@@ -1,0 +1,44 @@
+---
+source: valhalla-graphtile/src/graph_tile.rs
+expression: tile_view.transit_routes
+---
+[
+    TransitRoute {
+        route_color: U32(
+            21924,
+        ),
+        route_text_color: U32(
+            16777215,
+        ),
+        first_bitfield: RouteFirstBitfield {
+            route_type: 3,
+            one_stop_offset: U32(
+                368,
+            ),
+        },
+        operator_offsets: RouteOffsetPair {
+            first: U32(
+                384,
+            ),
+            second: U32(
+                401,
+            ),
+        },
+        website_and_short_name_offsets: RouteOffsetPair {
+            first: U32(
+                421,
+            ),
+            second: U32(
+                461,
+            ),
+        },
+        long_name_and_description_offsets: RouteOffsetPair {
+            first: U32(
+                464,
+            ),
+            second: U32(
+                480,
+            ),
+        },
+    },
+]
