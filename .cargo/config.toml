@@ -7,7 +7,7 @@ rustdocflags = ["--cfg", "zerocopy_derive_union_into_bytes"]
 linker = "s390x-linux-gnu-gcc"
 
 # Use QEMU to run cross-compiled test binaries in CI
-# qemu-s390x-static is provided by the qemu-user-static package
+# The qemu-user package provides qemu-s390x
 # The -L path points to the s390x sysroot installed by libc6-*-s390x-cross
-runner = "qemu-s390x-static -L /usr/s390x-linux-gnu"
+runner = "qemu-s390x -L /usr/s390x-linux-gnu"
 
