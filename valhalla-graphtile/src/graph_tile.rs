@@ -259,8 +259,7 @@ pub trait GraphTile {
     ///
     /// # Panics
     ///
-    /// Assumes that the level in the graph tile header is a standard or transit Valhalla level
-    /// (0 through 3 - transit)
+    /// Assumes that the level is a valid [`ValhallaLevel`].
     ///
     /// This function also assumes that the `x` and `y` values are within the accepted range
     /// (specifically, they must each be <= the square root of [`crate::BIN_COUNT`]).

@@ -205,9 +205,8 @@ pub static TRANSIT_LEVEL: LazyLock<TileLevel> = LazyLock::new(|| TileLevel {
     ),
 });
 
-/// A level of the Valhalla tile hierarchy that Valinor knows.
+/// A known Valhalla graph tile level.
 ///
-/// The discriminant is the level number in a [`GraphId`].
 /// Use [`ValhallaLevel::try_from`] to check a level number from a graph ID or a tile header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
