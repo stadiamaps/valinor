@@ -42,7 +42,7 @@ use crate::graph_tile::predicted_speeds::{
     COEFFICIENT_COUNT, PredictedSpeedCodecError, PredictedSpeeds,
 };
 use crate::spatial::DistanceApproximator;
-use crate::tile_hierarchy::tile_level;
+use crate::tile_hierarchy::{UnknownLevelError, ValhallaLevel};
 pub use crate::{
     Access,
     graph_id::{GraphId, InvalidGraphIdError},
@@ -259,9 +259,8 @@ pub trait GraphTile {
     ///
     /// # Panics
     ///
-    /// This function assumes that the level in the graph tile header is a standard Valhalla level
-    /// or the transit level.
-    /// Other values will cause a panic.
+    /// Assumes that the level in the graph tile header is a standard or transit Valhalla level
+    /// (0 through 3 - transit)
     ///
     /// This function also assumes that the `x` and `y` values are within the accepted range
     /// (specifically, they must each be <= the square root of [`crate::BIN_COUNT`]).
@@ -462,6 +461,8 @@ pub struct GraphNode<'a> {
 pub struct GraphTileView<'a> {
     /// Header with various metadata about the tile and internal sizes.
     header: &'a GraphTileHeader,
+    /// The checked hierarchy level from the header.
+    level: ValhallaLevel,
     /// The list of nodes in the graph tile.
     nodes: &'a [NodeInfo],
     /// The list of transitions between nodes on different levels.
@@ -649,10 +650,7 @@ impl GraphTile for GraphTileView<'_> {
             "y must be less than the square root of crate::BIN_COUNT"
         );
 
-        let level = self.header.graph_id().level();
-        let n_subdivisions = tile_level(level)
-            .map(|lvl| usize::from(lvl.tiling_system.n_subdivisions))
-            .expect("A decoded tile always has a known level");
+        let n_subdivisions = usize::from(self.level.definition().tiling_system.n_subdivisions);
         y * n_subdivisions + x
     }
 }
@@ -668,10 +666,9 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             }
         })?;
 
-        let level = header.graph_id().level();
-        if tile_level(level).is_none() {
-            return Err(GraphTileDecodingError::UnsupportedTileLevel(level));
-        }
+        let level = ValhallaLevel::try_from(header.graph_id().level()).map_err(
+            |UnknownLevelError(level)| GraphTileDecodingError::UnsupportedTileLevel(level),
+        )?;
 
         // All the variably sized data arrays...
         // The pattern here is to use `ref_from_prefix_with_elems` to consume a known number of elements
@@ -873,6 +870,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         if bytes.is_empty() {
             Ok(Self {
                 header,
+                level,
                 nodes,
                 transitions,
                 directed_edges,
@@ -1703,6 +1701,7 @@ mod tests {
     fn test_transit_tile_bins() {
         let tile = &*TEST_TRANSIT_TILE_L3;
         let tile_view = tile.borrow_dependent();
+        assert_eq!(tile_view.level, ValhallaLevel::Transit);
         assert_eq!(tile_view.edge_bins, []);
 
         assert_eq!(tile_view.bin_index_xy(0, 0), 0);

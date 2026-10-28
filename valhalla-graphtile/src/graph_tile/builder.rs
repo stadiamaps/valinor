@@ -130,6 +130,7 @@ impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
     fn from(value: &'a OwnedGraphTileHandle) -> Self {
         let GraphTileView {
             header,
+            level: _,
             nodes,
             transitions,
             directed_edges,
