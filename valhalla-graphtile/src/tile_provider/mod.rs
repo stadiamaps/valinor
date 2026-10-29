@@ -519,7 +519,7 @@ impl<K: std::hash::Hash + Eq + Clone> LockTable<K> {
 mod tests {
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
-    use crate::tile_hierarchy::ValhallaLevel;
+    use crate::tile_hierarchy::tile_level;
     use crate::tile_provider::{DirectoryGraphTileProvider, GraphTileProvider};
     use geo::{Destination, HasDimensions, Haversine, LineString, Validation, coord, point};
     use rand::rngs::ThreadRng;
@@ -624,7 +624,7 @@ mod tests {
                 let query_point = if let Ok(node) = tile_view.get_node(edge.end_node_id()) {
                     node.coordinate(sw).into()
                 } else {
-                    let level_info = ValhallaLevel::try_from(tile_view.header().graph_id().level()).expect("Unknown tile level").definition();
+                    let level_info = tile_level(tile_view.header().graph_id().level()).expect("Unknown tile level");
                     let tile_size = level_info.tiling_system.tile_size as f32;
                     let ne = coord! { x: sw.x + tile_size, y: sw.y + tile_size };
 

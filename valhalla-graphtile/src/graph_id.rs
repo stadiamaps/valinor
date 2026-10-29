@@ -1,4 +1,4 @@
-use crate::tile_hierarchy::ValhallaLevel;
+use crate::tile_hierarchy::tile_level;
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer};
 use std::fmt::{Display, Formatter};
@@ -218,9 +218,7 @@ impl GraphId {
     /// TODO: It seems like we could do this check at tile creation time?
     pub fn file_path(&self, extension: &str) -> Result<PathBuf, InvalidGraphIdError> {
         // This is quite ugly and prone to failure; this is a pretty literal C++ translation
-        let level = ValhallaLevel::try_from(self.level())
-            .map_err(|_| InvalidGraphIdError::Level)?
-            .definition();
+        let level = tile_level(self.level()).ok_or(InvalidGraphIdError::Level)?;
 
         let max_id = level.tiling_system.n_cols * level.tiling_system.n_rows - 1;
         let tile_id = self.tile_id();

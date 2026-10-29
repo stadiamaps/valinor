@@ -8,7 +8,6 @@ use super::{GraphId, RoadClass};
 use geo::{CoordFloat, Rect, coord};
 use num_traits::FromPrimitive;
 use std::sync::LazyLock;
-use thiserror::Error;
 
 /// A tiling system description.
 ///
@@ -205,80 +204,18 @@ pub static TRANSIT_LEVEL: LazyLock<TileLevel> = LazyLock::new(|| TileLevel {
     ),
 });
 
-/// A known Valhalla graph tile level.
+/// Gets the definition of hierarchy level `level`.
 ///
-/// Use [`ValhallaLevel::try_from`] to check a level number from a graph ID or a tile header.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(u8)]
-pub enum ValhallaLevel {
-    /// Level 0, with primary roads and higher.
-    Highway = 0,
-    /// Level 1, with tertiary roads and higher.
-    Arterial = 1,
-    /// Level 2, with all road classes.
-    Local = 2,
-    /// Level 3, with transit stops, routes, and schedules.
-    Transit = 3,
-}
-
-/// The level number is not a [`ValhallaLevel`].
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-#[error("unknown tile hierarchy level {0}")]
-pub struct UnknownLevelError(pub u8);
-
-impl ValhallaLevel {
-    /// The standard (road) levels, in level order.
-    pub const STANDARD: [Self; 3] = [Self::Highway, Self::Arterial, Self::Local];
-
-    /// All levels, in level order.
-    pub const ALL: [Self; 4] = [Self::Highway, Self::Arterial, Self::Local, Self::Transit];
-
-    /// Gets the level number.
-    #[inline]
-    #[must_use]
-    pub const fn number(self) -> u8 {
-        self as u8
-    }
-
-    /// Is this the transit level?
-    #[inline]
-    #[must_use]
-    pub const fn is_transit(self) -> bool {
-        matches!(self, Self::Transit)
-    }
-
-    /// Gets the definition of this level from [`STANDARD_LEVELS`] or [`TRANSIT_LEVEL`].
-    #[inline]
-    #[must_use]
-    pub fn definition(self) -> &'static TileLevel {
-        match self {
-            Self::Highway => &STANDARD_LEVELS[0],
-            Self::Arterial => &STANDARD_LEVELS[1],
-            Self::Local => &STANDARD_LEVELS[2],
-            Self::Transit => &TRANSIT_LEVEL,
-        }
-    }
-}
-
-impl TryFrom<u8> for ValhallaLevel {
-    type Error = UnknownLevelError;
-
-    #[inline]
-    fn try_from(level: u8) -> Result<Self, Self::Error> {
-        match level {
-            0 => Ok(Self::Highway),
-            1 => Ok(Self::Arterial),
-            2 => Ok(Self::Local),
-            3 => Ok(Self::Transit),
-            other => Err(UnknownLevelError(other)),
-        }
-    }
-}
-
-impl From<ValhallaLevel> for u8 {
-    #[inline]
-    fn from(level: ValhallaLevel) -> Self {
-        level.number()
+/// Returns `None` if `level` is not one of the [`STANDARD_LEVELS`] or the [`TRANSIT_LEVEL`].
+#[inline]
+#[must_use]
+pub fn tile_level(level: u8) -> Option<&'static TileLevel> {
+    if level == TRANSIT_LEVEL.level {
+        Some(&TRANSIT_LEVEL)
+    } else {
+        STANDARD_LEVELS
+            .iter()
+            .find(|tile_level| tile_level.level == level)
     }
 }
 
@@ -458,32 +395,16 @@ mod tests {
     }
 
     #[test]
-    fn test_valhalla_level_round_trip() {
-        for level in ValhallaLevel::ALL {
-            assert_eq!(ValhallaLevel::try_from(level.number()), Ok(level));
-            assert_eq!(u8::from(level), level.number());
-            assert_eq!(level.definition().level, level.number());
+    fn test_tile_level() {
+        for level in 0..=3 {
+            let tile_level = tile_level(level).expect("Missing tile level");
+            assert_eq!(tile_level.level, level);
         }
-        assert_eq!(ValhallaLevel::Local.definition().name, "local");
-        assert_eq!(ValhallaLevel::Transit.definition().name, "transit");
-        assert!(ValhallaLevel::Transit.is_transit());
-        assert!(ValhallaLevel::STANDARD.iter().all(|l| !l.is_transit()));
+        assert_eq!(tile_level(2).map(|l| l.name), Some("local"));
+        assert_eq!(tile_level(3).map(|l| l.name), Some("transit"));
 
         for level in 4..=u8::MAX {
-            assert_eq!(
-                ValhallaLevel::try_from(level),
-                Err(UnknownLevelError(level))
-            );
+            assert!(tile_level(level).is_none(), "Unexpected tile level {level}");
         }
-    }
-
-    #[test]
-    fn test_standard_levels_match_definitions() {
-        let standard: Vec<_> = ValhallaLevel::STANDARD
-            .iter()
-            .map(|level| level.definition().level)
-            .collect();
-        let statics: Vec<_> = STANDARD_LEVELS.iter().map(|level| level.level).collect();
-        assert_eq!(standard, statics);
     }
 }
