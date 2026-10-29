@@ -65,7 +65,7 @@ jobs:
 
     # .cargo/config.toml uses these packages as the s390x linker and test runner.
     - name: Install s390x cross toolchain and QEMU
-      run: sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu libc6-dev-s390x-cross qemu-user-static
+      run: sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu libc6-dev-s390x-cross qemu-user
 
     - name: Run tests (big-endian s390x)
       run: cargo nextest run --no-fail-fast --target s390x-unknown-linux-gnu
