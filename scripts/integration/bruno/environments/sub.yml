@@ -1,0 +1,4 @@
+name: sub
+variables:
+  - name: baseUrl
+    value: http://localhost:8003
