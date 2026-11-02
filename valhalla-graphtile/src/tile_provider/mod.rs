@@ -27,7 +27,7 @@ use crate::graph_tile::{
 pub use directory::DirectoryGraphTileProvider;
 pub use iterators::GraphSearchResult;
 use iterators::ResultsWithinRadius;
-pub(crate) use tarball::{INDEX_BIN_ENTRY_NAME, INDEX_ENTRY_SIZE, TAR_BLOCK_SIZE};
+pub(crate) use tarball::{INDEX_BIN_FILE_NAME, INDEX_ENTRY_SIZE, TAR_BLOCK_SIZE};
 
 /// The extension of graph tile files, in tile directories and in extract tarballs.
 pub(crate) const TILE_FILE_EXTENSION: &str = "gph";
@@ -61,30 +61,6 @@ pub enum GraphTileProviderError {
     UnsupportedTileVersion,
     #[error("the tile file for {graph_id} has {size} bytes, which is more than a tile can have")]
     TileTooLarge { graph_id: GraphId, size: u64 },
-}
-
-/// Access to the raw bytes of graph tiles, for code that copies tiles verbatim.
-pub trait TileBytesSource {
-    /// The error type of this source.
-    type Error: core::error::Error + 'static;
-
-    /// Returns the size in bytes of the tile that contains `graph_id`,
-    /// or [`None`] if the source does not contain the tile.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the source cannot find out whether it contains the tile.
-    fn tile_size(&self, graph_id: GraphId) -> Result<Option<u32>, Self::Error>;
-
-    /// Calls `process` with the raw bytes of the tile that contains `graph_id`,
-    /// and returns its result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the source does not contain the tile, or if it cannot read the tile.
-    fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
-    where
-        F: FnOnce(&[u8]) -> T;
 }
 
 /// A generic trait for all graph tile providers.

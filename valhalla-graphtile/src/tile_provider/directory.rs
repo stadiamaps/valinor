@@ -5,7 +5,7 @@ use crate::graph_tile::{GraphTileView, handles::OwnedGraphTileHandle};
 use crate::spatial::bbox_with_center;
 use crate::tile_hierarchy::STANDARD_LEVELS;
 use crate::tile_provider::{
-    GraphTileProvider, GraphTileProviderError, LockTable, TILE_FILE_EXTENSION, TileBytesSource,
+    GraphTileProvider, GraphTileProviderError, LockTable, TILE_FILE_EXTENSION,
 };
 use geo::{CoordFloat, Point};
 use lru::LruCache;
@@ -130,53 +130,6 @@ impl DirectoryGraphTileProvider {
             .base_directory
             .join(graph_id.file_path(TILE_FILE_EXTENSION)?))
     }
-
-    /// Reads the tile file for `base_graph_id`.
-    ///
-    /// The caller must hold the lock for `base_graph_id`.
-    fn read_tile_bytes(&self, base_graph_id: GraphId) -> Result<Vec<u8>, GraphTileProviderError> {
-        let path = self.path_for_graph_id(base_graph_id)?;
-        // NOTE: Does not handle compressed tiles
-        std::fs::read(path).map_err(|e| match e.kind() {
-            ErrorKind::NotFound => GraphTileProviderError::TileDoesNotExist,
-            _ => GraphTileProviderError::IoError(e),
-        })
-    }
-}
-
-impl TileBytesSource for DirectoryGraphTileProvider {
-    type Error = GraphTileProviderError;
-
-    /// The size comes from the file system metadata, so this reads no tile data.
-    fn tile_size(&self, graph_id: GraphId) -> Result<Option<u32>, Self::Error> {
-        let base_graph_id = graph_id.tile_base_id();
-        let size = match std::fs::metadata(self.path_for_graph_id(base_graph_id)?) {
-            Ok(metadata) if metadata.is_file() => metadata.len(),
-            Ok(_) => return Ok(None),
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-
-        u32::try_from(size)
-            .map(Some)
-            .map_err(|_| GraphTileProviderError::TileTooLarge {
-                graph_id: base_graph_id,
-                size,
-            })
-    }
-
-    fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
-    where
-        F: FnOnce(&[u8]) -> T,
-    {
-        let base_graph_id = graph_id.tile_base_id();
-        let lock = self.lock_table.lock_for(base_graph_id);
-        let _guard = lock.lock();
-
-        // Bypass the tile cache, so that a copy of many tiles does not evict hot tiles.
-        let tile_bytes = self.read_tile_bytes(base_graph_id)?;
-        Ok(process(&tile_bytes))
-    }
 }
 
 impl GraphTileProvider for DirectoryGraphTileProvider {
@@ -211,7 +164,13 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
             .map_err(|e| GraphTileProviderError::PoisonedCacheLock(e.to_string()))?;
         let tile = cache
             .try_get_or_insert(base_graph_id, || {
-                let data = self.read_tile_bytes(base_graph_id)?;
+                let path = self.path_for_graph_id(base_graph_id)?;
+                // Open the file and read all bytes into a buffer
+                // NOTE: Does not handle compressed tiles
+                let data = std::fs::read(path).map_err(|e| match e.kind() {
+                    ErrorKind::NotFound => GraphTileProviderError::TileDoesNotExist,
+                    _ => GraphTileProviderError::IoError(e),
+                })?;
                 let tile = OwnedGraphTileHandle::try_from(data)?;
                 Ok::<_, GraphTileProviderError>(Arc::new(tile))
             })
@@ -272,7 +231,7 @@ mod test {
     use crate::graph_tile::handles::GraphTileHandle;
     use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
-    use crate::tile_provider::{GraphTileProvider, GraphTileProviderError};
+    use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, TILE_FILE_EXTENSION};
     use core::num::NonZeroUsize;
     use rand::{
         distr::{Distribution, Uniform},
@@ -542,7 +501,7 @@ mod test {
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile_path = base.path().join(
             graph_id
-                .file_path("gph")
+                .file_path(TILE_FILE_EXTENSION)
                 .expect("Unable to get the tile path"),
         );
         std::fs::create_dir_all(tile_path).expect("Unable to create a directory at the tile path");
@@ -566,7 +525,7 @@ mod test {
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile_path = base.path().join(
             graph_id
-                .file_path("gph")
+                .file_path(TILE_FILE_EXTENSION)
                 .expect("Unable to get the tile path"),
         );
         let parent = tile_path.parent().expect("The tile path has a parent");

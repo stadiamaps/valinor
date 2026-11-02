@@ -1,4 +1,4 @@
-use super::{GraphTileProvider, GraphTileProviderError, TileBytesSource};
+use super::{GraphTileProvider, GraphTileProviderError};
 use crate::GraphId;
 use crate::graph_tile::handles::MmapGraphTileHandle;
 use crate::graph_tile::{
@@ -114,9 +114,9 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         };
 
         let mut entry = entry?;
-        if entry.path()?.to_string_lossy() != INDEX_BIN_ENTRY_NAME {
+        if entry.path()?.to_string_lossy() != INDEX_BIN_FILE_NAME {
             return Err(GraphTileProviderError::InvalidTarball(format!(
-                "Expected {INDEX_BIN_ENTRY_NAME} at the start of the archive"
+                "Expected {INDEX_BIN_FILE_NAME} at the start of the archive"
             )));
         }
 
@@ -185,51 +185,6 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
     /// An iterator over all tile IDs contained in the tarball, in arbitrary order.
     pub fn tile_ids(&self) -> impl Iterator<Item = &GraphId> {
         self.tile_index.keys()
-    }
-
-    /// Gets a pointer for the tile containing this graph ID.
-    ///
-    /// # Errors
-    ///
-    /// If the tile is not part of the tarball archive,
-    /// this returns [`GraphTileProviderError::TileDoesNotExist`].
-    #[inline]
-    fn tile_pointer(&self, graph_id: GraphId) -> Result<MmapTilePointer, GraphTileProviderError> {
-        let base_graph_id = graph_id.tile_base_id();
-        let Some(offsets) = self.tile_index.get(&base_graph_id) else {
-            return Err(GraphTileProviderError::TileDoesNotExist);
-        };
-
-        Ok(MmapTilePointer {
-            mmap: self.mmap.clone(),
-            offsets: *offsets,
-        })
-    }
-}
-
-impl<const MUT: bool, const CACHE: bool> TileBytesSource for TarballTileProvider<MUT, CACHE> {
-    type Error = GraphTileProviderError;
-
-    /// The size comes from the `index.bin` of the tarball, so this reads no tile data.
-    #[inline]
-    fn tile_size(&self, graph_id: GraphId) -> Result<Option<u32>, Self::Error> {
-        Ok(self
-            .tile_index
-            .get(&graph_id.tile_base_id())
-            .map(|tile_offset| tile_offset.size))
-    }
-
-    #[inline]
-    fn with_tile_bytes<F, T>(&self, graph_id: GraphId, process: F) -> Result<T, Self::Error>
-    where
-        F: FnOnce(&[u8]) -> T,
-    {
-        let tile_pointer = self.tile_pointer(graph_id)?;
-        // SAFETY: The provider checks at construction that every index range lies inside the memory map.
-        // We assume that the underlying memory map has not changed in a way that would render the tile invalid
-        // (see the safety discussion on TarballTileProvider).
-        let tile_bytes = unsafe { tile_pointer.as_tile_bytes() };
-        Ok(process(tile_bytes))
     }
 }
 
@@ -371,7 +326,15 @@ impl<const MUT: bool> TarballTileProvider<MUT, false> {
         &self,
         graph_id: GraphId,
     ) -> Result<MmapTilePointer, GraphTileProviderError> {
-        self.tile_pointer(graph_id)
+        let base_graph_id = graph_id.tile_base_id();
+        let Some(offsets) = self.tile_index.get(&base_graph_id) else {
+            return Err(GraphTileProviderError::TileDoesNotExist);
+        };
+
+        Ok(MmapTilePointer {
+            mmap: self.mmap.clone(),
+            offsets: *offsets,
+        })
     }
 }
 
@@ -504,8 +467,8 @@ pub(crate) const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
 /// Each entry is a header block, then its data, padded with zeros to whole blocks.
 pub(crate) const TAR_BLOCK_SIZE: u64 = 512;
 
-/// The name of the tile index entry, which is the first entry of an extract tarball.
-pub(crate) const INDEX_BIN_ENTRY_NAME: &str = "index.bin";
+/// The file name of the tile index, which is the first entry of an extract tarball.
+pub(crate) const INDEX_BIN_FILE_NAME: &str = "index.bin";
 
 /// The reasons why an `index.bin` file or one of its entries is not valid.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -1089,7 +1052,7 @@ mod test {
                 (
                     "directory",
                     directory_tile.tile_bytes(),
-                    GraphTileProvider::tile_size(&directory_provider, *graph_id),
+                    directory_provider.tile_size(*graph_id),
                 ),
                 (
                     "tarball",
