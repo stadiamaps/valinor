@@ -223,6 +223,11 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, false> {
     }
 
     #[inline]
+    fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
+        self.tile_size(graph_id)
+    }
+
+    #[inline]
     fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
@@ -264,6 +269,11 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, true> {
     }
 
     #[inline]
+    fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
+        self.tile_size(graph_id)
+    }
+
+    #[inline]
     fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
@@ -274,6 +284,15 @@ impl<const MUT: bool> GraphTileProvider for TarballTileProvider<MUT, true> {
 }
 
 impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
+    /// The size comes from the `index.bin` of the tarball, so this reads no tile data.
+    #[inline]
+    fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
+        self.tile_index
+            .get(&graph_id.tile_base_id())
+            .map(|tile_offset| tile_offset.size)
+            .ok_or(GraphTileProviderError::TileDoesNotExist)
+    }
+
     #[inline]
     fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
@@ -632,6 +651,7 @@ pub fn serialize_index_bin(entries: &[TileIndexBinEntry]) -> Result<&[u8], Inval
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::graph_tile::handles::GraphTileHandle;
     use crate::graph_tile::{GraphTile, GraphTileView};
     use crate::test_fixtures;
     use crate::tile_provider::DirectoryGraphTileProvider;
@@ -1020,6 +1040,69 @@ mod test {
                     .as_tile_bytes()
             };
             assert_eq!(directory_tile.borrow_owner(), immutable_tarball_tile_bytes);
+
+            let tarball_handle = tarball_provider
+                .get_handle_for_tile_containing(*graph_id)
+                .expect("Unable to get tile");
+            for (provider_name, tile_bytes, tile_size) in [
+                (
+                    "directory",
+                    directory_tile.tile_bytes(),
+                    directory_provider.tile_size(*graph_id),
+                ),
+                (
+                    "tarball",
+                    tarball_handle.tile_bytes(),
+                    tarball_provider.tile_size(*graph_id),
+                ),
+                (
+                    "immutable tarball",
+                    immutable_tarball_tile_pointer.tile_bytes(),
+                    immutable_tarball_provider.tile_size(*graph_id),
+                ),
+            ] {
+                assert_eq!(
+                    tile_bytes,
+                    directory_tile.borrow_owner().as_slice(),
+                    "The {provider_name} handle must give the bytes of the tile file for {graph_id}"
+                );
+                let tile_size = tile_size.expect("Unable to get the tile size");
+                assert_eq!(
+                    usize::try_from(tile_size).expect("The size fits in a usize"),
+                    tile_bytes.len(),
+                    "The {provider_name} size of {graph_id} must be the length of its bytes"
+                );
+            }
         }
+    }
+
+    // Tragically, memory maps are not supported by Miri!
+    #[cfg(not(miri))]
+    #[test]
+    fn test_tile_size_of_missing_tile() {
+        let tarball_path = test_fixtures::andorra_tiles_tar();
+        let tarball_provider = TarballTileProvider::new_readonly(tarball_path.clone())
+            .expect("Unable to init tile provider");
+        // SAFETY: Nothing writes to the fixture tarball while the tests run.
+        let immutable_tarball_provider = unsafe {
+            TarballTileProvider::new_immutable(tarball_path).expect("Unable to init tile provider")
+        };
+        // This tile is not in the Andorra extract.
+        let graph_id = GraphId::try_from_components(0, 0, 0).expect("Unable to create graph ID");
+
+        assert!(
+            matches!(
+                tarball_provider.tile_size(graph_id),
+                Err(GraphTileProviderError::TileDoesNotExist)
+            ),
+            "A tile that is not in the index must not exist"
+        );
+        assert!(
+            matches!(
+                immutable_tarball_provider.tile_size(graph_id),
+                Err(GraphTileProviderError::TileDoesNotExist)
+            ),
+            "A tile that is not in the index must not exist"
+        );
     }
 }
