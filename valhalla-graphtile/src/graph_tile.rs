@@ -983,7 +983,7 @@ mod tests {
         TEST_GRAPH_TILE_WITH_FLOW,
     };
     use enumset::{EnumSet, enum_set};
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     #[test]
     fn test_get_opp_edge_index() {
