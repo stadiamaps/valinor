@@ -6,18 +6,21 @@ fn main() -> Result<()> {
         "It looks like you've enabled both protoc-from-src and protoc-vendored at the same time. You probably want to pick just one.\n\n(Hint: did you forget to add default-features = false in your Cargo.toml?)"
     );
 
-    unsafe {
-        // protoc compiled from source
-        #[cfg(feature = "protoc-from-src")]
-        std::env::set_var("PROTOC", protobuf_src::protoc());
+    println!("cargo:rerun-if-env-changed=PROTOC");
+    let mut config = prost_build::Config::new();
 
-        // Vendored protoc binary
-        #[cfg(feature = "protoc-vendored")]
-        std::env::set_var(
-            "PROTOC",
-            protoc_bin_vendored::protoc_bin_path().expect("Unable to find protoc!"),
-        );
+    #[cfg(feature = "protoc-from-src")]
+    config.protoc_executable(protobuf_src::protoc());
+
+    #[cfg(feature = "protoc-vendored")]
+    match protoc_bin_vendored::protoc_bin_path() {
+        Ok(path) => {
+            config.protoc_executable(path);
+        }
+        Err(err) => println!(
+            "cargo:warning=vendored protoc unavailable ({err}); using PROTOC or protoc on PATH"
+        ),
     }
-    prost_build::compile_protos(&["proto/api.proto"], &["proto/"])?;
+    config.compile_protos(&["proto/api.proto"], &["proto/"])?;
     Ok(())
 }
