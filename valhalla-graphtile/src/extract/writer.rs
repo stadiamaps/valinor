@@ -601,11 +601,10 @@ mod tests {
         let tile_path = base.path().join(&relative_path);
         std::fs::create_dir_all(tile_path.parent().expect("the tile path has a parent"))
             .expect("Unable to create the tile directory");
-        std::fs::copy(
-            test_fixtures::andorra_tiles_dir().join(&relative_path),
-            &tile_path,
-        )
-        .expect("Unable to copy the tile");
+        // Miri does not support the `copy_file_range` call that `fs::copy` uses on Linux.
+        let bytes = std::fs::read(test_fixtures::andorra_tiles_dir().join(&relative_path))
+            .expect("Unable to read the tile");
+        std::fs::write(&tile_path, bytes).expect("Unable to write the tile");
         (base, tile_path)
     }
 
