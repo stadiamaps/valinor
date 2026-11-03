@@ -35,15 +35,13 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: taiki-e/install-action@nextest
+    - uses: taiki-e/install-action@just
 
     - name: Build workspace
       run: cargo build --verbose
 
     - name: Run tests
-      run: cargo nextest run --no-fail-fast
-
-    - name: Run doc tests (not currently supported by nextest https://github.com/nextest-rs/nextest/issues/16)
-      run: cargo test --doc
+      run: just test
 
     - name: Build valhalla-graphtile in isolation (default feature flags)
       run: cargo build -p valhalla-graphtile
@@ -59,6 +57,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: taiki-e/install-action@nextest
+    - uses: taiki-e/install-action@just
 
     - name: Install big-endian toolchain (s390x)
       run: rustup target add s390x-unknown-linux-gnu
@@ -68,7 +67,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu libc6-dev-s390x-cross qemu-user
 
     - name: Run tests (big-endian s390x)
-      run: cargo nextest run --no-fail-fast --target s390x-unknown-linux-gnu
+      run: just test-unit --target s390x-unknown-linux-gnu
 
   miri:
     name: Miri (${{ matrix.name }})
@@ -96,6 +95,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: taiki-e/install-action@nextest
+    - uses: taiki-e/install-action@just
 
     - name: Install Miri
       run: rustup +nightly component add miri
@@ -104,8 +104,8 @@ jobs:
       run: rustup +nightly target add ${{ matrix.target }}
 
     - name: Run tests in Miri
-      run: cargo +nightly miri nextest run --no-fail-fast --target ${{ matrix.target }}
+      run: just miri --target ${{ matrix.target }}
 
     - name: Run doc tests in Miri
       if: matrix.doc-tests
-      run: cargo +nightly miri test --doc
+      run: just miri-doc
