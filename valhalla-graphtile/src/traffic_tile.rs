@@ -142,8 +142,8 @@ pub enum SegmentTrafficInfo {
 /// Traffic speeds over an edge.
 ///
 /// This stores speed and optional congestion and incident information for a single edge in the graph.
-/// For long edges with variable traffic conditions (e.g. motorways) and traffic conditions may vary,
-/// ture allows breaking the edge up into 3 segments,
+/// For long edges with variable traffic conditions (e.g., motorways),
+/// this structure allows breaking the edge up into 3 segments,
 /// each with their own speed and congestion info.
 #[bitfield(u64,
     repr = U64<LE>,
