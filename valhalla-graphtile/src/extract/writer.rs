@@ -78,13 +78,8 @@ impl ExtractWriteError {
     }
 }
 
-/// Writes an extract with the tiles that contain `tile_ids` from `provider` into `dest`,
-/// and returns the number of bytes written.
-///
-/// The writer copies each tile verbatim.
-/// The tiles are written in the standard order,
-/// so a given input set of tile IDs always produces the same output bytes.
-/// The writer writes each tile once, even if `tile_ids` contains more than one graph ID in it.
+/// Writes a deterministic extract with the tiles that contain `tile_ids` from `provider`
+/// into `dest`, and returns the number of bytes written.
 ///
 /// For a [`DirectoryGraphTileProvider`](crate::tile_provider::DirectoryGraphTileProvider),
 /// the tile files must not change during the write,
@@ -165,7 +160,6 @@ where
             .map_err(|source| ExtractWriteError::from_provider(graph_id, source))??;
     }
 
-    // Write the end of archive marker
     dest.write_all(&ZERO_BLOCK)?;
     dest.write_all(&ZERO_BLOCK)?;
     dest.flush()?;
@@ -342,7 +336,7 @@ mod tests {
         }
     }
 
-    /// Returns the path and payload offset of each entry, as the `tar` crate reads them.
+    /// Returns the raw header path and the payload offset of each entry.
     fn read_entries(archive_bytes: &[u8]) -> Vec<(String, u64)> {
         Archive::new(archive_bytes)
             .entries()
