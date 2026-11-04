@@ -37,8 +37,8 @@ REQUEST_TIMEOUT_SECONDS = 30
 def connect() -> docker.DockerClient:
     """Connects to the Docker daemon.
 
-    If the default connection fails, this uses the endpoint of the current Docker CLI context,
-    which docker-py does not read (for example, the socket of colima).
+    If the default connection fails, this uses the current Docker CLI context
+    (for example, the socket of colima). docker-py does not read that context.
     """
     try:
         client = docker.from_env()
@@ -110,8 +110,8 @@ def build_config(client: docker.DockerClient, image: str) -> dict[str, Any]:
 class ValhallaServer:
     """A ``valhalla_service`` container which serves one extract.
 
-    Use it as a context manager: the container starts on entry,
-    and is removed on exit (also after an error or Ctrl-C).
+    Use it as a context manager: entry starts the container,
+    and exit removes it (also after an error or Ctrl-C).
     Call ``logs`` before the exit to keep the logs.
     """
 
@@ -161,8 +161,9 @@ class ValhallaServer:
             command=[CONTAINER_CONFIG, "1"],
             ports={f"{SERVICE_PORT}/tcp": self.host_port},
         )
-        # Copy the data in place of a bind mount, which fails for a directory
-        # that the Docker VM does not share (such as /tmp with colima).
+        # Copy the data in place of a bind mount.
+        # A bind mount fails for a directory that the Docker VM does not share
+        # (such as /tmp with colima).
         with tempfile.TemporaryFile() as archive:
             self._write_data_archive(archive)
             archive.seek(0)

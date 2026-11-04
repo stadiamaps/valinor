@@ -75,7 +75,6 @@ def main(argv: list[str] | None = None) -> int:
     # Remove the containers on SIGTERM (for example, a cancelled CI job), as on Ctrl-C.
     signal.signal(signal.SIGTERM, _interrupt)
     argv = sys.argv[1:] if argv is None else argv
-    # Make `run` the default command.
     if not argv or argv[0] not in (*COMMANDS, "-h", "--help"):
         argv = ["run", *argv]
     args = _parser().parse_args(argv)

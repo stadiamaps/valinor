@@ -45,7 +45,7 @@ def run(settings: Settings, inputs: Inputs) -> bool:
     """Serves both extracts, sends every request to both, and compares the responses.
 
     Returns ``True`` if every check passes.
-    The responses, the logs, and the config are saved in the work directory.
+    The work directory keeps the responses, the logs, and the config.
     """
     collection = _load_checked_collection(inputs.collection)
     client, config = _prepare(settings, inputs)
@@ -66,7 +66,7 @@ def run(settings: Settings, inputs: Inputs) -> bool:
         for name, server in servers.items():
             responses[name] = _send_all(server, collection, responses_dir / name, failures)
 
-        # Capture the logs before the containers are removed.
+        # Capture the logs before the exit removes the containers.
         for name, server in servers.items():
             logs = server.logs()
             log_file = inputs.workdir / f"valhalla-{name}.log"

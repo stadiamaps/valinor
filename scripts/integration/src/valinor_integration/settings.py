@@ -17,7 +17,6 @@ DEFAULT_VALHALLA_IMAGE = "ghcr.io/valhalla/valhalla"
 LATEST_TAG = "latest"
 DEFAULT_SERVE_PORT = 8002
 
-# This file is scripts/integration/src/valinor_integration/settings.py.
 HARNESS_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = HARNESS_DIR.parents[1]
 

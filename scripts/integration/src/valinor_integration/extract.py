@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 def read_tile_list(path: Path) -> list[str]:
     """Reads a tile list: one ``level/tile_id`` on each line.
 
-    ``#`` starts a comment, and blank lines are ignored.
+    ``#`` starts a comment, and the reader skips blank lines.
     ``valinor-cli`` checks the form of each tile.
     """
     tiles = []
