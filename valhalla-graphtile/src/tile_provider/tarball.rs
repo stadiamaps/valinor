@@ -651,8 +651,10 @@ pub fn serialize_index_bin(entries: &[TileIndexBinEntry]) -> Result<&[u8], Inval
 #[cfg(test)]
 mod test {
     use super::*;
+    #[cfg(not(miri))]
     use crate::graph_tile::handles::GraphTileHandle;
     use crate::graph_tile::{GraphTile, GraphTileView};
+    #[cfg(not(miri))]
     use crate::test_fixtures;
     use crate::tile_provider::DirectoryGraphTileProvider;
     use proptest::collection::vec;

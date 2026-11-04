@@ -1,6 +1,7 @@
 //! Paths to the test fixtures in the `fixtures` directory of this crate.
 //!
 //! All fixtures are made from the same OpenStreetMap extract of Andorra.
+//! Miri does not support memory maps, so the tarball fixtures do not exist under Miri.
 
 use std::path::PathBuf;
 
@@ -17,6 +18,7 @@ pub(crate) fn andorra_tiles_dir() -> PathBuf {
 
 /// The tiles of [`andorra_tiles_dir`] in an extract tarball,
 /// as `valhalla_build_extract` writes it.
+#[cfg(not(miri))]
 pub(crate) fn andorra_tiles_tar() -> PathBuf {
     fixture("andorra-tiles.tar")
 }
@@ -28,6 +30,7 @@ pub(crate) fn andorra_tiles_with_traffic_dir() -> PathBuf {
 }
 
 /// A live traffic tarball for the Andorra tiles.
+#[cfg(not(miri))]
 pub(crate) fn andorra_traffic_tar() -> PathBuf {
     fixture("andorra-traffic.tar")
 }
