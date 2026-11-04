@@ -1,6 +1,6 @@
 //! Paths to the test fixtures in the `fixtures` directory of this crate.
 //!
-//! All fixtures are made from the same OpenStreetMap extract of Andorra.
+//! All fixtures come from the same OpenStreetMap extract of Andorra.
 //! Miri does not support memory maps, so the tarball fixtures do not exist under Miri.
 
 use std::path::PathBuf;

@@ -22,7 +22,7 @@ pub trait GraphTileHandle {
 
     /// Returns the bytes of the tile, exactly as the handle got them.
     ///
-    /// The view from [`GraphTileHandle::tile_view`] was decoded from these bytes,
+    /// The handle decoded the view of [`GraphTileHandle::tile_view`] from these bytes,
     /// so they are a valid graph tile.
     fn tile_bytes(&self) -> &[u8];
 }
@@ -317,8 +317,8 @@ impl GraphTileHandle for MmapGraphTileHandle {
 
     #[inline]
     fn tile_bytes(&self) -> &[u8] {
-        // SAFETY: The decoded view borrows this same range of the memory map,
-        // so the caller of `MmapGraphTileHandle::try_from` already accepted
+        // SAFETY: The decoded view borrows this same range of the memory map.
+        // The caller of `MmapGraphTileHandle::try_from` already accepted
         // the conditions of `MmapTilePointer::as_tile_bytes` for the life of the handle.
         unsafe { self.borrow_owner().as_tile_bytes() }
     }
