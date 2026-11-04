@@ -240,13 +240,9 @@ mod tests {
     use crate::graph_tile::GraphTileView;
     use crate::graph_tile::handles::OwnedGraphTileHandle;
     use crate::test_fixtures;
-    use crate::tile_provider::{DirectoryGraphTileProvider, TarballTileProvider, parse_index_bin};
+    use crate::tile_provider::{DirectoryGraphTileProvider, parse_index_bin};
     use geo::{CoordFloat, Point};
     use num_traits::FromPrimitive;
-    use proptest::collection::vec;
-    use proptest::prelude::ProptestConfig;
-    use proptest::sample::select;
-    use proptest::{prop_assert, prop_assert_eq, proptest};
     use std::collections::{HashMap, HashSet};
     use std::io::Read;
     use std::num::NonZeroUsize;
@@ -254,26 +250,11 @@ mod tests {
     use std::sync::Arc;
     use tar::Archive;
 
-    /// The tiles of the Andorra fixtures, in archive order.
-    const ANDORRA_TILES: [(u8, u64); 7] = [
-        (0, 3015),
-        (1, 47_701),
-        (2, 762_485),
-        (2, 762_486),
-        (2, 763_925),
-        (2, 763_926),
-        (2, 763_927),
-    ];
-
     /// The smallest Andorra tile, which keeps the tests that run under Miri fast.
     const SMALL_TILE: (u8, u64) = (2, 763_927);
 
     fn tile((level, tile_id): (u8, u64)) -> GraphId {
         GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
-    }
-
-    fn andorra_tiles() -> Vec<GraphId> {
-        ANDORRA_TILES.into_iter().map(tile).collect()
     }
 
     fn directory_provider(base: &Path) -> DirectoryGraphTileProvider {
@@ -673,154 +654,173 @@ mod tests {
         );
     }
 
-    // Miri is too slow to decode all of the Andorra tiles.
+    // Miri is too slow to decode all of the Andorra tiles, and it does not support memory maps.
     #[cfg(not(miri))]
-    #[test]
-    fn test_write_all_andorra_tiles() {
-        let provider = TestProvider::new();
-        let mut archive_bytes = Vec::new();
-        let written = write_extract(&provider, andorra_tiles(), &mut archive_bytes)
-            .expect("the extract writes cleanly");
+    mod all_andorra_tiles {
+        use super::*;
+        use crate::tile_provider::TarballTileProvider;
+        use proptest::collection::vec;
+        use proptest::prelude::ProptestConfig;
+        use proptest::sample::select;
+        use proptest::{prop_assert, prop_assert_eq, proptest};
 
-        assert_eq!(
-            written,
-            archive_bytes.len() as u64,
-            "The return value must be the number of bytes written"
-        );
-        check_archive(
-            &archive_bytes,
-            &andorra_tiles(),
-            &test_fixtures::andorra_tiles_dir(),
-        );
-    }
-
-    // Miri is too slow to decode all of the Andorra tiles.
-    #[cfg(not(miri))]
-    #[test]
-    fn test_order_and_duplicates_do_not_change_output() {
-        let provider = TestProvider::new();
-        let mut in_order = Vec::new();
-        write_extract(&provider, andorra_tiles(), &mut in_order).expect("first write succeeds");
-
-        // Reverse order, with every tile twice: once as a base ID and once with a feature index.
-        let scrambled = andorra_tiles().into_iter().rev().flat_map(|graph_id| {
-            let with_feature_index = graph_id
-                .with_feature_index(42)
-                .expect("valid feature index");
-            [graph_id, with_feature_index]
-        });
-        let mut from_scrambled = Vec::new();
-        write_extract(&provider, scrambled, &mut from_scrambled).expect("second write succeeds");
-
-        assert!(
-            in_order == from_scrambled,
-            "The order of the tile IDs, duplicates, and feature indexes must not change the output"
-        );
-    }
-
-    // Tragically, memory maps are not supported by Miri!
-    #[cfg(not(miri))]
-    #[test]
-    fn test_andorra_round_trip() {
-        let source_provider = TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
-            .expect("Unable to init the source tile provider");
-
-        // Out of archive order, and with one nonzero feature index.
-        let tile_ids = [
-            tile((2, 763_926)),
-            tile((0, 3015)),
-            GraphId::try_from_components(1, 47_701, 42).expect("valid graph ID in test"),
-            tile((2, 762_485)),
+        /// The tiles of the Andorra fixtures, in archive order.
+        const ANDORRA_TILES: [(u8, u64); 7] = [
+            (0, 3015),
+            (1, 47_701),
+            (2, 762_485),
+            (2, 762_486),
+            (2, 763_925),
+            (2, 763_926),
+            (2, 763_927),
         ];
-        let excluded = tile((2, 763_925));
-        assert!(
-            source_provider.tile_size(excluded).is_ok(),
-            "The excluded tile must be in the source"
-        );
 
-        let mut archive_bytes = Vec::new();
-        write_extract(&source_provider, tile_ids, &mut archive_bytes)
-            .expect("the extract writes cleanly");
-
-        let mut archive_file = tempfile::NamedTempFile::new().expect("a temporary file is created");
-        archive_file
-            .write_all(&archive_bytes)
-            .expect("the extract is written to disk");
-        let extract_provider = TarballTileProvider::new_readonly(archive_file.path())
-            .expect("the generated extract opens cleanly");
-
-        for graph_id in tile_ids {
-            let extract_tile = extract_provider
-                .get_handle_for_tile_containing(graph_id)
-                .expect("the tile is in the extract");
-            let source_tile = source_provider
-                .get_handle_for_tile_containing(graph_id)
-                .expect("the tile is in the source");
-            assert!(
-                extract_tile.tile_bytes() == source_tile.tile_bytes(),
-                "Tile {graph_id} must have the same bytes in the extract and in the source"
-            );
+        fn andorra_tiles() -> Vec<GraphId> {
+            ANDORRA_TILES.into_iter().map(tile).collect()
         }
-        assert!(
-            matches!(
-                extract_provider.tile_size(excluded),
-                Err(GraphTileProviderError::TileDoesNotExist)
-            ),
-            "A tile that was not requested must not be in the extract"
-        );
-    }
-
-    // Tragically, memory maps are not supported by Miri!
-    #[cfg(not(miri))]
-    #[test]
-    fn test_directory_and_tarball_providers_write_the_same_extract() {
-        // The two fixtures contain the same tiles.
-        let tarball = TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
-            .expect("Unable to init the tarball tile provider");
-        let directory = directory_provider(&test_fixtures::andorra_tiles_dir());
-
-        let mut from_tarball = Vec::new();
-        write_extract(&tarball, andorra_tiles(), &mut from_tarball)
-            .expect("the extract writes cleanly from the tarball");
-        let mut from_directory = Vec::new();
-        write_extract(&directory, andorra_tiles(), &mut from_directory)
-            .expect("the extract writes cleanly from the directory");
-        assert!(
-            from_tarball == from_directory,
-            "The tarball and the directory of the same tiles must give the same extract"
-        );
-    }
-
-    // Miri is too slow to decode the Andorra tiles in many cases.
-    #[cfg(not(miri))]
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
-        fn test_archive_matches_independent_reader(
-            // Andorra tiles in any order, with duplicates and feature indexes.
-            tile_ids in vec((select(&ANDORRA_TILES[..]), 0u64..4), 1..12)
-        ) {
-            let tile_ids: Vec<GraphId> = tile_ids
-                .into_iter()
-                .map(|(tile_key, feature_index)| {
-                    tile(tile_key)
-                        .with_feature_index(feature_index)
-                        .expect("valid feature index")
-                })
-                .collect();
-            let mut expected_tiles: Vec<GraphId> =
-                tile_ids.iter().map(GraphId::tile_base_id).collect();
-            expected_tiles.sort_unstable_by_key(|graph_id| (graph_id.level(), graph_id.tile_id()));
-            expected_tiles.dedup();
-
+        fn test_write_all_andorra_tiles() {
+            let provider = TestProvider::new();
             let mut archive_bytes = Vec::new();
-            let written = write_extract(&TestProvider::new(), tile_ids, &mut archive_bytes)
+            let written = write_extract(&provider, andorra_tiles(), &mut archive_bytes)
                 .expect("the extract writes cleanly");
 
-            prop_assert_eq!(written, archive_bytes.len() as u64);
-            prop_assert!(!expected_tiles.is_empty());
-            check_archive(&archive_bytes, &expected_tiles, &test_fixtures::andorra_tiles_dir());
+            assert_eq!(
+                written,
+                archive_bytes.len() as u64,
+                "The return value must be the number of bytes written"
+            );
+            check_archive(
+                &archive_bytes,
+                &andorra_tiles(),
+                &test_fixtures::andorra_tiles_dir(),
+            );
+        }
+
+        #[test]
+        fn test_order_and_duplicates_do_not_change_output() {
+            let provider = TestProvider::new();
+            let mut in_order = Vec::new();
+            write_extract(&provider, andorra_tiles(), &mut in_order).expect("first write succeeds");
+
+            // Reverse order, with every tile twice: once as a base ID and once with a feature index.
+            let scrambled = andorra_tiles().into_iter().rev().flat_map(|graph_id| {
+                let with_feature_index = graph_id
+                    .with_feature_index(42)
+                    .expect("valid feature index");
+                [graph_id, with_feature_index]
+            });
+            let mut from_scrambled = Vec::new();
+            write_extract(&provider, scrambled, &mut from_scrambled)
+                .expect("second write succeeds");
+
+            assert!(
+                in_order == from_scrambled,
+                "The order of the tile IDs, duplicates, and feature indexes must not change the output"
+            );
+        }
+
+        #[test]
+        fn test_andorra_round_trip() {
+            let source_provider =
+                TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
+                    .expect("Unable to init the source tile provider");
+
+            // Out of archive order, and with one nonzero feature index.
+            let tile_ids = [
+                tile((2, 763_926)),
+                tile((0, 3015)),
+                GraphId::try_from_components(1, 47_701, 42).expect("valid graph ID in test"),
+                tile((2, 762_485)),
+            ];
+            let excluded = tile((2, 763_925));
+            assert!(
+                source_provider.tile_size(excluded).is_ok(),
+                "The excluded tile must be in the source"
+            );
+
+            let mut archive_bytes = Vec::new();
+            write_extract(&source_provider, tile_ids, &mut archive_bytes)
+                .expect("the extract writes cleanly");
+
+            let mut archive_file =
+                tempfile::NamedTempFile::new().expect("a temporary file is created");
+            archive_file
+                .write_all(&archive_bytes)
+                .expect("the extract is written to disk");
+            let extract_provider = TarballTileProvider::new_readonly(archive_file.path())
+                .expect("the generated extract opens cleanly");
+
+            for graph_id in tile_ids {
+                let extract_tile = extract_provider
+                    .get_handle_for_tile_containing(graph_id)
+                    .expect("the tile is in the extract");
+                let source_tile = source_provider
+                    .get_handle_for_tile_containing(graph_id)
+                    .expect("the tile is in the source");
+                assert!(
+                    extract_tile.tile_bytes() == source_tile.tile_bytes(),
+                    "Tile {graph_id} must have the same bytes in the extract and in the source"
+                );
+            }
+            assert!(
+                matches!(
+                    extract_provider.tile_size(excluded),
+                    Err(GraphTileProviderError::TileDoesNotExist)
+                ),
+                "A tile that was not requested must not be in the extract"
+            );
+        }
+
+        #[test]
+        fn test_directory_and_tarball_providers_write_the_same_extract() {
+            // The two fixtures contain the same tiles.
+            let tarball = TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
+                .expect("Unable to init the tarball tile provider");
+            let directory = directory_provider(&test_fixtures::andorra_tiles_dir());
+
+            let mut from_tarball = Vec::new();
+            write_extract(&tarball, andorra_tiles(), &mut from_tarball)
+                .expect("the extract writes cleanly from the tarball");
+            let mut from_directory = Vec::new();
+            write_extract(&directory, andorra_tiles(), &mut from_directory)
+                .expect("the extract writes cleanly from the directory");
+            assert!(
+                from_tarball == from_directory,
+                "The tarball and the directory of the same tiles must give the same extract"
+            );
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(32))]
+
+            #[test]
+            fn test_archive_matches_independent_reader(
+                // Andorra tiles in any order, with duplicates and feature indexes.
+                tile_ids in vec((select(&ANDORRA_TILES[..]), 0u64..4), 1..12)
+            ) {
+                let tile_ids: Vec<GraphId> = tile_ids
+                    .into_iter()
+                    .map(|(tile_key, feature_index)| {
+                        tile(tile_key)
+                            .with_feature_index(feature_index)
+                            .expect("valid feature index")
+                    })
+                    .collect();
+                let mut expected_tiles: Vec<GraphId> =
+                    tile_ids.iter().map(GraphId::tile_base_id).collect();
+                expected_tiles.sort_unstable_by_key(|graph_id| (graph_id.level(), graph_id.tile_id()));
+                expected_tiles.dedup();
+
+                let mut archive_bytes = Vec::new();
+                let written = write_extract(&TestProvider::new(), tile_ids, &mut archive_bytes)
+                    .expect("the extract writes cleanly");
+
+                prop_assert_eq!(written, archive_bytes.len() as u64);
+                prop_assert!(!expected_tiles.is_empty());
+                check_archive(&archive_bytes, &expected_tiles, &test_fixtures::andorra_tiles_dir());
+            }
         }
     }
 }
