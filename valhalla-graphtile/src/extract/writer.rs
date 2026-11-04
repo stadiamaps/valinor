@@ -10,7 +10,6 @@
 
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
-use crate::graph_tile::handles::GraphTileHandle;
 use crate::tile_provider::{
     GraphTileProvider, GraphTileProviderError, INDEX_BIN_FILE_NAME, INDEX_ENTRY_SIZE,
     InvalidIndexBinError, TAR_BLOCK_SIZE, TILE_FILE_EXTENSION, TileIndexBinEntry,
@@ -148,20 +147,21 @@ where
     for entry in &layout.entries {
         let graph_id = entry.graph_id()?;
         let path = graph_id.relative_path(TILE_FILE_EXTENSION)?;
-        let tile = provider
-            .get_handle_for_tile_containing(graph_id)
-            .map_err(|source| ExtractWriteError::from_provider(graph_id, source))?;
-
-        let tile_bytes = tile.tile_bytes();
-        let expected = entry.size();
-        if tile_bytes.len() != expected as usize {
-            return Err(ExtractWriteError::SizeMismatch {
-                graph_id,
-                expected,
-                actual: tile_bytes.len(),
-            });
-        }
-        write_entry(&mut dest, &path, tile_bytes)?;
+        provider
+            .with_tile_containing(graph_id, |tile| {
+                let tile_bytes = tile.tile_bytes();
+                let expected = entry.size();
+                if tile_bytes.len() != expected as usize {
+                    return Err(ExtractWriteError::SizeMismatch {
+                        graph_id,
+                        expected,
+                        actual: tile_bytes.len(),
+                    });
+                }
+                write_entry(&mut dest, &path, tile_bytes)?;
+                Ok(())
+            })
+            .map_err(|source| ExtractWriteError::from_provider(graph_id, source))??;
     }
 
     // Write the end of archive marker
@@ -281,6 +281,13 @@ mod tests {
                 read_failures: HashSet::new(),
             }
         }
+
+        fn check_read(&self, graph_id: GraphId) -> Result<(), GraphTileProviderError> {
+            if self.read_failures.contains(&graph_id.tile_base_id()) {
+                return Err(test_failure());
+            }
+            Ok(())
+        }
     }
 
     fn test_failure() -> GraphTileProviderError {
@@ -298,6 +305,7 @@ mod tests {
         where
             F: FnOnce(&GraphTileView) -> T,
         {
+            self.check_read(graph_id)?;
             self.inner.with_tile_containing(graph_id, process)
         }
 
@@ -305,9 +313,7 @@ mod tests {
             &self,
             graph_id: GraphId,
         ) -> Result<Self::TileHandle, GraphTileProviderError> {
-            if self.read_failures.contains(&graph_id.tile_base_id()) {
-                return Err(test_failure());
-            }
+            self.check_read(graph_id)?;
             self.inner.get_handle_for_tile_containing(graph_id)
         }
 
@@ -593,10 +599,9 @@ mod tests {
     fn test_write_rejects_tile_changed_after_cache() {
         let (base, tile_path) = copy_small_tile();
         let provider = directory_provider(base.path());
-        let cached = provider
-            .get_handle_for_tile_containing(tile(SMALL_TILE))
+        let cached_len = provider
+            .with_tile_containing(tile(SMALL_TILE), |tile| tile.tile_bytes().len())
             .expect("Unable to get tile");
-        let cached_len = cached.tile_bytes().len();
 
         // The file grows, but the cache of the provider keeps the old bytes.
         let mut file = std::fs::OpenOptions::new()
@@ -754,13 +759,13 @@ mod tests {
 
             for graph_id in tile_ids {
                 let extract_tile = extract_provider
-                    .get_handle_for_tile_containing(graph_id)
+                    .with_tile_containing(graph_id, |tile| tile.tile_bytes().to_vec())
                     .expect("the tile is in the extract");
                 let source_tile = source_provider
-                    .get_handle_for_tile_containing(graph_id)
+                    .with_tile_containing(graph_id, |tile| tile.tile_bytes().to_vec())
                     .expect("the tile is in the source");
                 assert!(
-                    extract_tile.tile_bytes() == source_tile.tile_bytes(),
+                    extract_tile == source_tile,
                     "Tile {graph_id} must have the same bytes in the extract and in the source"
                 );
             }
