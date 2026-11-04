@@ -121,8 +121,8 @@ pub trait GraphTileProvider {
     ///
     /// # Performance
     ///
-    /// Implementations SHOULD get the size from an index or from file metadata,
-    /// so that a caller can get the sizes of many tiles before it reads any of them.
+    /// Implementations SHOULD get the size from an index or from file metadata.
+    /// A caller can then get the sizes of many tiles before it reads any of them.
     ///
     /// # Errors
     ///
