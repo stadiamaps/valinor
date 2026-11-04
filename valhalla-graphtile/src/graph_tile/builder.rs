@@ -129,7 +129,6 @@ fn build_speed_profile_dedup_map(memory: &[I16<LE>]) -> HashMap<[i16; COEFFICIEN
 impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
     fn from(value: &'a OwnedGraphTileHandle) -> Self {
         let GraphTileView {
-            tile_bytes: _,
             header,
             nodes,
             transitions,

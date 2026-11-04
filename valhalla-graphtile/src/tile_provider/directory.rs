@@ -180,7 +180,7 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
     ///
     /// The size is the size of the file at the time of the call.
     /// If the file changes after the provider caches the tile,
-    /// the size and the cached tile do not agree.
+    /// the size and the cached handle do not agree.
     fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
         let base_graph_id = graph_id.tile_base_id();
         let size = match std::fs::metadata(self.path_for_graph_id(base_graph_id)?) {
@@ -224,6 +224,7 @@ mod test {
     use super::DirectoryGraphTileProvider;
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
+    use crate::graph_tile::handles::GraphTileHandle;
     use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
     use crate::tile_provider::{GraphTileProvider, GraphTileProviderError};
@@ -455,7 +456,7 @@ mod test {
     }
 
     #[test]
-    fn test_tile_size_matches_view_bytes() {
+    fn test_tile_size_matches_handle_bytes() {
         let provider =
             DirectoryGraphTileProvider::new(test_fixtures::andorra_tiles_dir(), NonZeroUsize::MIN);
         // The feature index is not zero, so the provider must use the base ID of the tile.
@@ -464,12 +465,12 @@ mod test {
         let size = provider
             .tile_size(graph_id)
             .expect("Unable to get the tile size");
-        let tile_bytes_len = provider
-            .with_tile_containing(graph_id, |tile| tile.tile_bytes().len())
+        let tile = provider
+            .get_handle_for_tile_containing(graph_id)
             .expect("Unable to get tile");
         assert_eq!(
             usize::try_from(size).expect("The size fits in a usize"),
-            tile_bytes_len,
+            tile.tile_bytes().len(),
             "The tile size must be the length of the tile bytes"
         );
     }
