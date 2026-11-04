@@ -152,7 +152,7 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         };
 
         // Tile pointers slice the map without a bounds check,
-        // so the map must have the length that the index ranges were checked against.
+        // so the length of the map must equal the length that the index check used.
         if mmap.len() as u64 != archive_len {
             return Err(GraphTileProviderError::InvalidTarball(format!(
                 "the archive changed size while it was opened ({archive_len} bytes, then {} bytes)",
@@ -943,7 +943,7 @@ mod test {
     proptest! {
         #[test]
         fn test_index_bin_roundtrip(
-            // Levels are 3 bits, tile IDs are 22 bits, and offsets are counted in 512-byte blocks.
+            // Levels are 3 bits, tile IDs are 22 bits, and offsets count 512-byte blocks.
             // The offset bound keeps the end of every tile inside a u64.
             raw_entries in vec(
                 (0u8..=7, 0u64..1 << 22, 1u64..=(u64::MAX - u64::from(u32::MAX)) / 512, 0u32..=u32::MAX),
