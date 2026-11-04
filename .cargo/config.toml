@@ -1,4 +1,4 @@
-[build]
+[target.'cfg(all())']
 rustflags = ["--cfg", "zerocopy_derive_union_into_bytes"]
 rustdocflags = ["--cfg", "zerocopy_derive_union_into_bytes"]
 

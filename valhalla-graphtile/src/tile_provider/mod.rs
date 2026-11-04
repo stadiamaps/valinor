@@ -523,7 +523,7 @@ mod tests {
     use crate::tile_provider::{DirectoryGraphTileProvider, GraphTileProvider};
     use geo::{Destination, HasDimensions, Haversine, LineString, Validation, coord, point};
     use rand::rngs::ThreadRng;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
     use std::num::NonZeroUsize;
     use std::path::PathBuf;
 

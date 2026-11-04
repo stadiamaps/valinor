@@ -95,7 +95,7 @@ Please review https://github.com/stadiamaps/valinor/blob/main/AGENTS.md#for-huma
 
 #### For binary crates
 
-- Binary crates may be less rigorous with type modeling and leverage `anyhow` where appopriate.
+- Binary crates may be less rigorous with type modeling and leverage `anyhow` where appropriate.
 - Avoid over-using `anyhow` for hot paths, as the backtrace overhead is extremely high.
 
 ### Async patterns
@@ -127,8 +127,7 @@ Please review https://github.com/stadiamaps/valinor/blob/main/AGENTS.md#for-huma
 
 ### Running tests
 
-- Always use `cargo nextest run` to run unit and integration tests.
-- For doctests, use `cargo test --doc` (doctests are not supported by nextest).
+- Use `just test` to run the full test suite.
 
 ### Test organization
 
@@ -137,7 +136,7 @@ Please review https://github.com/stadiamaps/valinor/blob/main/AGENTS.md#for-huma
 
 ### Testing tools
 
-- **nextest**: Test runner that replaces the built-in cargo runnen.
+- **nextest**: Test runner that replaces the built-in cargo runner.
 - **proptest**: For property-based testing.
 - **insta**: For snapshot testing.
 
@@ -214,17 +213,14 @@ contains more details about its design and features.
 ### Commands
 
 ```bash
-# Run tests (ALWAYS use nextest for unit/integration tests)
-cargo nextest run
-
-# Run doctests (nextest doesn't support these)
-cargo test --doc
+# Run tests (ALWAYS use this for the full suite as it ensures everything runs nicely, in parallel, the same way as CI)
+just test
 
 # Format code (REQUIRED before committing)
-cargo fmt
+just fmt
 
 # Lint
-cargo clippy
+just lint
 
 # Build
 cargo build

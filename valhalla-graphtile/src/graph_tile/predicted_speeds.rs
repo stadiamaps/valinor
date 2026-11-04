@@ -371,7 +371,7 @@ mod tests {
 
             // Method 1: Decompress first; then average the decompressed speeds
             // NB: Since our test contains essentially random speeds, we can't accurately compare
-            // with the true average, since the compresion is so lossy.
+            // with the true average, since the compression is so lossy.
             // This approach tests the actual property which is "if we decompressed the speeds
             // and then averaged those values, is that the same as averaging the coefficients directly."
             let mut b1 = [0.0f32; BUCKETS_PER_WEEK];
