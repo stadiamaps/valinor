@@ -249,17 +249,14 @@ impl GraphId {
         components_to_graph_id(input, level, tile_id, 0)
     }
 
-    /// Returns the relative path of the tile file for this graph ID,
-    /// with `/` separators on every platform (e.g. `2/000/762/485.gph`).
-    ///
-    /// Valhalla uses this path in tile directories and extract tarballs.
-    /// The feature index is not part of the path.
+    /// Constructs a relative path for the given tile.
     ///
     /// # Errors
     ///
     /// This will fail if the tile is invalid for this level of tiling.
     /// TODO: It seems like we could do this check at tile creation time?
-    pub fn relative_path(&self, extension: &str) -> Result<String, InvalidGraphIdError> {
+    pub fn file_path(&self, extension: &str) -> Result<PathBuf, InvalidGraphIdError> {
+        // This is quite ugly and prone to failure; this is a pretty literal C++ translation
         let level_number = self.level();
         let level = if level_number == TRANSIT_LEVEL.level {
             &*TRANSIT_LEVEL
@@ -275,31 +272,25 @@ impl GraphId {
             return Err(InvalidGraphIdError::GraphTileId);
         }
 
-        // The width of the largest tile ID of the level, rounded up to a whole number of groups.
-        let n_digits = (max_id.max(1).ilog10() + 1).next_multiple_of(3) as usize;
-        let padded_id = format!("{tile_id:0>n_digits$}");
+        let l = max_id.max(1).ilog10() + 1;
+        let rem = l % 3;
+        let n_digits = if rem == 0 { l } else { l + (3 - rem) };
+        debug_assert!(n_digits % 3 == 0);
 
-        let mut path = level_number.to_string();
-        // The padded ID is ASCII, and its length is a multiple of 3.
-        for group_start in (0..n_digits).step_by(3) {
-            path.push('/');
-            path.push_str(&padded_id[group_start..group_start + 3]);
-        }
-        if !extension.is_empty() {
-            path.push('.');
-            path.push_str(extension);
-        }
+        // This may not be as efficient as the Valhalla implementation, but it's more readable.
+        // Format tile_id with leading zeros to match max_length
+        let padded_id = format!("{:0>width$}", tile_id, width = n_digits as usize);
+        let tile_id_chars: Vec<_> = padded_id.chars().collect();
+        // Create the final path using groups of threes
+        let tile_id_component = tile_id_chars
+            .rchunks(3)
+            .fold(PathBuf::new(), |acc, chunk| {
+                PathBuf::from(chunk.iter().collect::<String>()).join(acc)
+            })
+            .with_extension(extension);
 
-        Ok(path)
-    }
-
-    /// Returns [`GraphId::relative_path`] as a [`PathBuf`], with the separators of the platform.
-    ///
-    /// # Errors
-    ///
-    /// This will fail if the tile is invalid for this level of tiling.
-    pub fn file_path(&self, extension: &str) -> Result<PathBuf, InvalidGraphIdError> {
-        Ok(self.relative_path(extension)?.split('/').collect())
+        // Build and return the final string
+        Ok(PathBuf::from(self.level().to_string()).join(tile_id_component))
     }
 }
 
@@ -549,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn test_relative_path() {
+    fn test_file_path() {
         // Levels 0 and 1 pad the tile ID to 6 digits, and level 2 pads it to 9.
         for (graph_id, expected) in [
             (tile(0, 3015), "0/003/015.gph"),
@@ -559,7 +550,6 @@ mod tests {
             (tile(2, 762_485), "2/000/762/485.gph"),
             (tile(2, 1_036_799), "2/001/036/799.gph"),
         ] {
-            assert_eq!(graph_id.relative_path("gph").as_deref(), Ok(expected));
             assert_eq!(
                 graph_id.file_path("gph"),
                 Ok(expected.split('/').collect::<PathBuf>())
@@ -568,32 +558,29 @@ mod tests {
 
         let with_index = GraphId::try_from_components(2, 762_485, 42).unwrap();
         assert_eq!(
-            with_index.relative_path("gph").as_deref(),
-            Ok("2/000/762/485.gph")
+            with_index.file_path("gph"),
+            Ok(["2", "000", "762", "485.gph"].iter().collect::<PathBuf>())
         );
 
         assert_eq!(
-            tile(1, 47_701).relative_path("").as_deref(),
-            Ok("1/047/701")
+            tile(1, 47_701).file_path(""),
+            Ok(["1", "047", "701"].iter().collect::<PathBuf>())
         );
     }
 
     #[test]
-    fn test_relative_path_invalid() {
+    fn test_file_path_invalid() {
         // Level 0 has 45 × 90 tiles, so its largest tile ID is 4049.
         assert_eq!(
-            tile(0, 4049).relative_path("gph").as_deref(),
-            Ok("0/004/049.gph")
+            tile(0, 4049).file_path("gph"),
+            Ok(["0", "004", "049.gph"].iter().collect::<PathBuf>())
         );
         assert_eq!(
-            tile(0, 4050).relative_path("gph"),
+            tile(0, 4050).file_path("gph"),
             Err(InvalidGraphIdError::GraphTileId)
         );
         // Levels 4 to 7 fit in the bit field, but they have no tiling system.
-        assert_eq!(
-            tile(5, 0).relative_path("gph"),
-            Err(InvalidGraphIdError::Level)
-        );
+        assert_eq!(tile(5, 0).file_path("gph"), Err(InvalidGraphIdError::Level));
     }
 
     #[test]
