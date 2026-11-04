@@ -4,7 +4,7 @@
 //! and writes the archive in one pass. The archive contains:
 //!
 //! 1. `index.bin`, which Valhalla requires as the first entry of a remote tarball.
-//! 2. The tiles at the paths of [`GraphId::relative_path`],
+//! 2. The tiles at the paths of [`GraphId::file_path`] with `/` separators,
 //!    in ascending (level, tile index) order.
 //! 3. The two-block end-of-archive marker.
 
@@ -17,6 +17,7 @@ use crate::tile_provider::{
     serialize_index_bin,
 };
 use std::io::Write;
+use std::path::Path;
 use tar::{EntryType, Header};
 use thiserror::Error;
 
@@ -147,7 +148,7 @@ where
 
     for entry in &layout.entries {
         let graph_id = entry.graph_id()?;
-        let path = graph_id.relative_path(TILE_FILE_EXTENSION)?;
+        let path = graph_id.file_path(TILE_FILE_EXTENSION)?;
         let tile = provider
             .get_handle_for_tile_containing(graph_id)
             .map_err(|source| ExtractWriteError::from_provider(graph_id, source))?;
@@ -215,7 +216,11 @@ const fn entry_len(payload_len: u64) -> u64 {
 }
 
 /// Writes a tar entry for `payload` at `path`.
-fn write_entry<W: Write>(dest: &mut W, path: &str, payload: &[u8]) -> std::io::Result<()> {
+fn write_entry<W: Write>(
+    dest: &mut W,
+    path: impl AsRef<Path>,
+    payload: &[u8],
+) -> std::io::Result<()> {
     // Keep all metadata fixed, so that the same tiles always give the same bytes.
     let mut header = Header::new_ustar();
     header.set_entry_type(EntryType::Regular);
@@ -338,11 +343,7 @@ mod tests {
             .expect("the archive is readable")
             .map(|entry| {
                 let entry = entry.expect("every entry is readable");
-                let path = entry
-                    .path()
-                    .expect("every entry path is valid")
-                    .to_string_lossy()
-                    .into_owned();
+                let path = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
                 (path, entry.raw_file_position())
             })
             .collect()
@@ -377,9 +378,12 @@ mod tests {
         let entries = read_entries(archive_bytes);
         let mut expected_paths = vec![INDEX_BIN_FILE_NAME.to_string()];
         expected_paths.extend(expected_tiles.iter().map(|graph_id| {
-            graph_id
-                .relative_path(TILE_FILE_EXTENSION)
-                .expect("valid tile")
+            let file_path = graph_id.file_path(TILE_FILE_EXTENSION).expect("valid tile");
+            let components: Vec<&str> = file_path
+                .iter()
+                .map(|component| component.to_str().expect("tile paths are ASCII"))
+                .collect();
+            components.join("/")
         }));
         let entry_paths: Vec<&String> = entries.iter().map(|(path, _)| path).collect();
         assert_eq!(
@@ -652,6 +656,13 @@ mod tests {
             &[tile(SMALL_TILE)],
             &test_fixtures::andorra_tiles_dir(),
         );
+
+        // Tar entry names use `/` on every platform.
+        let entry_paths: Vec<String> = read_entries(&archive_bytes)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(entry_paths, ["index.bin", "2/000/763/927.gph"]);
     }
 
     // Miri is too slow to decode all of the Andorra tiles, and it does not support memory maps.
