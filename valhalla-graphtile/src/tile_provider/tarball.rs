@@ -584,7 +584,8 @@ fn check_offset(graph_id: GraphId, offset: u64) -> Result<(), InvalidIndexBinErr
     Ok(())
 }
 
-/// Makes sure that the tile at `offset` with `size` bytes lies inside an archive of `archive_len` bytes.
+/// Makes sure that the tile at `offset` with `size` bytes
+/// lies inside an archive of `archive_len` bytes.
 fn check_range(
     graph_id: GraphId,
     offset: u64,
@@ -655,8 +656,6 @@ pub fn serialize_index_bin(entries: &[TileIndexBinEntry]) -> Result<&[u8], Inval
 #[cfg(test)]
 mod test {
     use super::*;
-    #[cfg(not(miri))]
-    use crate::graph_tile::handles::GraphTileHandle;
     use crate::graph_tile::{GraphTile, GraphTileView};
     #[cfg(not(miri))]
     use crate::test_fixtures;
@@ -1047,30 +1046,31 @@ mod test {
             };
             assert_eq!(directory_tile.borrow_owner(), immutable_tarball_tile_bytes);
 
-            let tarball_handle = tarball_provider
-                .get_handle_for_tile_containing(*graph_id)
-                .expect("Unable to get tile");
             for (provider_name, tile_bytes, tile_size) in [
                 (
                     "directory",
-                    directory_tile.tile_bytes(),
+                    directory_provider
+                        .with_tile_containing(*graph_id, |tile| tile.tile_bytes().to_vec()),
                     directory_provider.tile_size(*graph_id),
                 ),
                 (
                     "tarball",
-                    tarball_handle.tile_bytes(),
+                    tarball_provider
+                        .with_tile_containing(*graph_id, |tile| tile.tile_bytes().to_vec()),
                     tarball_provider.tile_size(*graph_id),
                 ),
                 (
                     "immutable tarball",
-                    immutable_tarball_tile_pointer.tile_bytes(),
+                    immutable_tarball_provider
+                        .with_tile_containing(*graph_id, |tile| tile.tile_bytes().to_vec()),
                     immutable_tarball_provider.tile_size(*graph_id),
                 ),
             ] {
+                let tile_bytes = tile_bytes.expect("Unable to get tile");
                 assert_eq!(
                     tile_bytes,
                     directory_tile.borrow_owner().as_slice(),
-                    "The {provider_name} handle must give the bytes of the tile file for {graph_id}"
+                    "The {provider_name} view must give the bytes of the tile file for {graph_id}"
                 );
                 let tile_size = tile_size.expect("Unable to get the tile size");
                 assert_eq!(

@@ -460,6 +460,8 @@ pub struct GraphNode<'a> {
 /// Cloning this struct is cheap, since the internal types are all references.
 #[derive(Clone)]
 pub struct GraphTileView<'a> {
+    /// All bytes of the tile, from the start of the header to the end of the last section.
+    tile_bytes: &'a [u8],
     /// Header with various metadata about the tile and internal sizes.
     header: &'a GraphTileHeader,
     /// The list of nodes in the graph tile.
@@ -489,6 +491,16 @@ pub struct GraphTileView<'a> {
     // TODO: Stop one stops(?)
     // TODO: Route one stops(?)
     // TODO: Operator one stops(?)
+}
+
+impl<'a> GraphTileView<'a> {
+    /// Returns the bytes that this view decoded, with no copy.
+    ///
+    /// The slice is exactly one full tile, with no trailing bytes.
+    #[inline]
+    pub fn tile_bytes(&self) -> &'a [u8] {
+        self.tile_bytes
+    }
 }
 
 impl GraphTile for GraphTileView<'_> {
@@ -667,6 +679,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
     type Error = GraphTileDecodingError;
 
     fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
+        let tile_bytes = bytes;
         let (header, bytes) = GraphTileHeader::ref_from_prefix(bytes).map_err(|e| {
             GraphTileDecodingError::CastError {
                 field: "header".to_string(),
@@ -884,6 +897,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
 
         if bytes.is_empty() {
             Ok(Self {
+                tile_bytes,
                 header,
                 nodes,
                 transitions,
@@ -984,6 +998,23 @@ mod tests {
     };
     use enumset::{EnumSet, enum_set};
     use rand::{RngExt, rng};
+
+    #[test]
+    fn test_tile_bytes_is_the_decoded_slice() {
+        for tile in [
+            &*TEST_GRAPH_TILE_L0,
+            &*TEST_GRAPH_TILE_L2,
+            &*TEST_GRAPH_TILE_WITH_FLOW,
+        ] {
+            let decoded = tile.borrow_owner().as_slice();
+            let tile_bytes = tile.borrow_dependent().tile_bytes();
+            assert!(
+                core::ptr::eq(tile_bytes, decoded),
+                "The view of {} must return the slice that it decoded, with no copy",
+                tile.graph_id()
+            );
+        }
+    }
 
     #[test]
     fn test_get_opp_edge_index() {

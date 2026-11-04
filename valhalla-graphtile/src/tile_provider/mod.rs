@@ -19,7 +19,6 @@ mod tarball;
 mod traffic;
 
 use crate::graph_id::InvalidGraphIdError;
-use crate::graph_tile::handles::GraphTileHandle;
 use crate::graph_tile::{
     DirectedEdge, GraphTile, GraphTileDecodingError, GraphTileView, LookupError, NodeInfo,
     OpposingEdgeIndex,
@@ -73,7 +72,7 @@ pub trait GraphTileProvider {
     /// The tile handle type for owned handles.
     ///
     /// Code using the `GraphTileProvider` may rely on the handles being cheaply cloneable.
-    type TileHandle: GraphTile + GraphTileHandle + Clone;
+    type TileHandle: GraphTile + Clone;
 
     /// Gets the tile containing the given graph ID,
     /// and does some work in a closure which takes the reference as a parameter.
@@ -121,7 +120,7 @@ pub trait GraphTileProvider {
     /// without reading or decoding the tile.
     ///
     /// While the tile data does not change, the size is the length of
-    /// [`GraphTileHandle::tile_bytes`] for the handle of the same tile.
+    /// [`GraphTileView::tile_bytes`] for the same tile.
     ///
     /// # Performance
     ///
