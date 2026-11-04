@@ -243,7 +243,7 @@ impl GraphId {
     ///
     /// Returns an error if `input` does not have two `/`-separated components,
     /// or if a component is not a non-negative integer.
-    /// It also returns an error if the level or the tile ID is out of range.
+    /// It also returns an error if the level or the tile ID does not fit in a graph ID.
     pub fn parse_tile(input: &str) -> Result<Self, ParseGraphIdError> {
         let [level, tile_id] = parse_components(input, "level/tile_id", ["level", "tile ID"])?;
         components_to_graph_id(input, level, tile_id, 0)
