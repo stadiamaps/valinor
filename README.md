@@ -34,7 +34,8 @@ At the moment, we rely on an unstable feature of zerocopy due to underspecified 
 See [this discussion](https://github.com/google/zerocopy/discussions/1802) for details.
 
 TL;DR, you'll need to set a config flag.
-We do it like this in `.cargo/config.toml`:
+For example, something like this in a cargo config.toml
+or via environment variables:
 
 ```toml
 [build]

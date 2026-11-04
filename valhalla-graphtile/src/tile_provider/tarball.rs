@@ -584,7 +584,8 @@ fn check_offset(graph_id: GraphId, offset: u64) -> Result<(), InvalidIndexBinErr
     Ok(())
 }
 
-/// Makes sure that the tile at `offset` with `size` bytes lies inside an archive of `archive_len` bytes.
+/// Makes sure that the tile at `offset` with `size` bytes
+/// lies inside an archive of `archive_len` bytes.
 fn check_range(
     graph_id: GraphId,
     offset: u64,
