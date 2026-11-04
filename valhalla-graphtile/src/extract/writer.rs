@@ -249,9 +249,6 @@ mod tests {
     use std::sync::Arc;
     use tar::Archive;
 
-    /// The smallest Andorra tile, which keeps the tests that run under Miri fast.
-    const SMALL_TILE: (u8, u64) = (2, 763_927);
-
     fn tile((level, tile_id): (u8, u64)) -> GraphId {
         GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
     }
@@ -377,6 +374,7 @@ mod tests {
 
         let entries = read_entries(archive_bytes);
         let mut expected_paths = vec![INDEX_BIN_FILE_NAME.to_string()];
+        // Tar entry names use `/` on every platform.
         expected_paths.extend(expected_tiles.iter().map(|graph_id| {
             let file_path = graph_id.file_path(TILE_FILE_EXTENSION).expect("valid tile");
             let components: Vec<&str> = file_path
@@ -505,7 +503,7 @@ mod tests {
         let mut dest = Vec::new();
         assert!(
             matches!(
-                write_extract(&TestProvider::new(), [tile(SMALL_TILE), missing], &mut dest),
+                write_extract(&TestProvider::new(), [test_fixtures::smallest_andorra_tile(), missing], &mut dest),
                 Err(ExtractWriteError::MissingTile(graph_id)) if graph_id == missing
             ),
             "A tile that is not in the provider must be a MissingTile error"
@@ -516,16 +514,18 @@ mod tests {
     #[test]
     fn test_write_reports_size_errors_before_write() {
         let mut provider = TestProvider::new();
-        provider.size_failures.insert(tile(SMALL_TILE));
+        provider
+            .size_failures
+            .insert(test_fixtures::smallest_andorra_tile());
 
         let mut dest = Vec::new();
         assert!(
             matches!(
-                write_extract(&provider, [tile(SMALL_TILE)], &mut dest),
+                write_extract(&provider, [test_fixtures::smallest_andorra_tile()], &mut dest),
                 Err(ExtractWriteError::Provider {
                     graph_id,
                     source: GraphTileProviderError::TileFetchError(_),
-                }) if graph_id == tile(SMALL_TILE)
+                }) if graph_id == test_fixtures::smallest_andorra_tile()
             ),
             "A failure to get a tile size must be a Provider error"
         );
@@ -538,15 +538,17 @@ mod tests {
     #[test]
     fn test_write_reports_read_errors() {
         let mut provider = TestProvider::new();
-        provider.read_failures.insert(tile(SMALL_TILE));
+        provider
+            .read_failures
+            .insert(test_fixtures::smallest_andorra_tile());
 
         assert!(
             matches!(
-                write_extract(&provider, [tile(SMALL_TILE)], Vec::new()),
+                write_extract(&provider, [test_fixtures::smallest_andorra_tile()], Vec::new()),
                 Err(ExtractWriteError::Provider {
                     graph_id,
                     source: GraphTileProviderError::TileFetchError(_),
-                }) if graph_id == tile(SMALL_TILE)
+                }) if graph_id == test_fixtures::smallest_andorra_tile()
             ),
             "A failure to read a tile must be a Provider error"
         );
@@ -556,20 +558,20 @@ mod tests {
     fn test_write_rejects_size_mismatch() {
         let mut provider = TestProvider::new();
         let real_size = provider
-            .tile_size(tile(SMALL_TILE))
+            .tile_size(test_fixtures::smallest_andorra_tile())
             .expect("the tile has a size");
         provider
             .reported_sizes
-            .insert(tile(SMALL_TILE), real_size + 1);
+            .insert(test_fixtures::smallest_andorra_tile(), real_size + 1);
 
         assert!(
             matches!(
-                write_extract(&provider, [tile(SMALL_TILE)], Vec::new()),
+                write_extract(&provider, [test_fixtures::smallest_andorra_tile()], Vec::new()),
                 Err(ExtractWriteError::SizeMismatch {
                     graph_id,
                     expected,
                     actual,
-                }) if graph_id == tile(SMALL_TILE)
+                }) if graph_id == test_fixtures::smallest_andorra_tile()
                     && expected == real_size + 1
                     && actual == real_size as usize
             ),
@@ -580,7 +582,7 @@ mod tests {
     /// Copies the small Andorra tile into a new tile directory.
     fn copy_small_tile() -> (tempfile::TempDir, std::path::PathBuf) {
         let base = tempfile::tempdir().expect("Unable to create a temporary directory");
-        let relative_path = tile(SMALL_TILE)
+        let relative_path = test_fixtures::smallest_andorra_tile()
             .file_path(TILE_FILE_EXTENSION)
             .expect("valid tile");
         let tile_path = base.path().join(&relative_path);
@@ -598,7 +600,9 @@ mod tests {
         let (base, tile_path) = copy_small_tile();
         let provider = directory_provider(base.path());
         let cached_len = provider
-            .with_tile_containing(tile(SMALL_TILE), |tile| tile.tile_bytes().len())
+            .with_tile_containing(test_fixtures::smallest_andorra_tile(), |tile| {
+                tile.tile_bytes().len()
+            })
             .expect("Unable to get tile");
 
         // The file grows, but the cache of the provider keeps the old bytes.
@@ -610,7 +614,7 @@ mod tests {
 
         assert!(
             matches!(
-                write_extract(&provider, [tile(SMALL_TILE)], Vec::new()),
+                write_extract(&provider, [test_fixtures::smallest_andorra_tile()], Vec::new()),
                 Err(ExtractWriteError::SizeMismatch {
                     expected,
                     actual,
@@ -628,11 +632,11 @@ mod tests {
 
         assert!(
             matches!(
-                write_extract(&directory_provider(base.path()), [tile(SMALL_TILE)], Vec::new()),
+                write_extract(&directory_provider(base.path()), [test_fixtures::smallest_andorra_tile()], Vec::new()),
                 Err(ExtractWriteError::Provider {
                     graph_id,
                     source: GraphTileProviderError::DecodingError(_),
-                }) if graph_id == tile(SMALL_TILE)
+                }) if graph_id == test_fixtures::smallest_andorra_tile()
             ),
             "An empty tile file must fail to decode"
         );
@@ -642,8 +646,12 @@ mod tests {
     fn test_write_small_tile() {
         let provider = TestProvider::new();
         let mut archive_bytes = Vec::new();
-        let written = write_extract(&provider, [tile(SMALL_TILE)], &mut archive_bytes)
-            .expect("the extract writes cleanly");
+        let written = write_extract(
+            &provider,
+            [test_fixtures::smallest_andorra_tile()],
+            &mut archive_bytes,
+        )
+        .expect("the extract writes cleanly");
 
         assert_eq!(
             written,
@@ -652,16 +660,9 @@ mod tests {
         );
         check_archive(
             &archive_bytes,
-            &[tile(SMALL_TILE)],
+            &[test_fixtures::smallest_andorra_tile()],
             &test_fixtures::andorra_tiles_dir(),
         );
-
-        // Tar entry names use `/` on every platform.
-        let entry_paths: Vec<String> = read_entries(&archive_bytes)
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
-        assert_eq!(entry_paths, ["index.bin", "2/000/763/927.gph"]);
     }
 
     // Miri is too slow to decode all of the Andorra tiles, and it does not support memory maps.
