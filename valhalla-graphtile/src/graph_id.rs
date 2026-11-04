@@ -237,13 +237,13 @@ impl GraphId {
 
     /// Parses the base graph ID of a tile from `level/tile_id` (e.g. `2/762485`).
     ///
-    /// Whitespace around each component is ignored.
+    /// The parser ignores whitespace around each component.
     ///
     /// # Errors
     ///
     /// Returns an error if `input` does not have two `/`-separated components,
-    /// if a component is not a non-negative integer,
-    /// or if the level or the tile ID is out of range.
+    /// or if a component is not a non-negative integer.
+    /// It also returns an error if the level or the tile ID is out of range.
     pub fn parse_tile(input: &str) -> Result<Self, ParseGraphIdError> {
         let [level, tile_id] = parse_components(input, "level/tile_id", ["level", "tile ID"])?;
         components_to_graph_id(input, level, tile_id, 0)

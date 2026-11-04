@@ -36,10 +36,10 @@ pub enum ExtractWriteError {
     /// A requested tile is not in the provider.
     #[error("tile {0} is not in the provider")]
     MissingTile(GraphId),
-    /// A requested graph ID cannot be converted into a tar entry path.
+    /// A requested graph ID has no tar entry path.
     #[error("invalid graph ID: {0}")]
     InvalidGraphId(#[from] InvalidGraphIdError),
-    /// A tile cannot be indexed.
+    /// A tile has no valid `index.bin` entry.
     #[error("invalid index.bin: {0}")]
     InvalidIndexBin(#[from] InvalidIndexBinError),
     /// The length of a tile differs from the size that the provider reported,
@@ -84,7 +84,7 @@ impl ExtractWriteError {
 /// The writer copies each tile verbatim.
 /// The tiles are written in the standard order,
 /// so a given input set of tile IDs always produces the same output bytes.
-/// Each tile is written once, even if `tile_ids` contains more than one graph ID in it.
+/// The writer writes each tile once, even if `tile_ids` contains more than one graph ID in it.
 ///
 /// For a [`DirectoryGraphTileProvider`](crate::tile_provider::DirectoryGraphTileProvider),
 /// the tile files must not change during the write,
@@ -429,11 +429,11 @@ mod tests {
         // The index entry (a header and 5 × 16 bytes) fills blocks 0 and 1.
         // Each payload starts one block after its header.
         let expected_offsets = [
-            3 * B,  // header at block 2; payload is 1 block
-            5 * B,  // header at block 4; payload is padded to 1 block
-            7 * B,  // header at block 6; payload is padded to 2 blocks
-            10 * B, // header at block 9; payload is 2 blocks
-            13 * B, // header at block 12; payload is padded to 1 block
+            3 * B,  // header at block 2, payload is 1 block
+            5 * B,  // header at block 4, payload is padded to 1 block
+            7 * B,  // header at block 6, payload is padded to 2 blocks
+            10 * B, // header at block 9, payload is 2 blocks
+            13 * B, // header at block 12, payload is padded to 1 block
         ];
 
         assert_eq!(
