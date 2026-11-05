@@ -1,0 +1,28 @@
+info:
+  name: andorra-la-vella-center
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{baseUrl}}/locate"
+  body:
+    type: json
+    data: |-
+      {
+        "locations": [
+          {
+            "lat": 42.5063,
+            "lon": 1.5218
+          }
+        ],
+        "costing": "auto",
+        "verbose": true
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

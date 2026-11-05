@@ -221,7 +221,9 @@ impl GraphId {
         let level = if level_number == TRANSIT_LEVEL.level {
             &*TRANSIT_LEVEL
         } else {
-            &STANDARD_LEVELS[level_number as usize]
+            STANDARD_LEVELS
+                .get(level_number as usize)
+                .ok_or(InvalidGraphIdError::Level)?
         };
 
         let max_id = level.tiling_system.n_cols * level.tiling_system.n_rows - 1;
@@ -421,6 +423,37 @@ mod tests {
                 .unwrap()
                 .file_path("gph"),
             Ok("3/001/000/000.gph".into())
+        );
+    }
+
+    #[test]
+    fn test_file_path_invalid() {
+        // Each level has a 4°, 1°, or 0.25° grid of 4050, 64800, or 1036800 tiles.
+        // Level 2 has one more directory, because its tile IDs have more digits.
+        for (level, max_tile_id, path) in [
+            (0, 4049, "0/004/049.gph"),
+            (1, 64_799, "1/064/799.gph"),
+            (2, 1_036_799, "2/001/036/799.gph"),
+        ] {
+            assert_eq!(
+                GraphId::try_from_components(level, max_tile_id, 0)
+                    .unwrap()
+                    .file_path("gph"),
+                Ok(path.into())
+            );
+            assert_eq!(
+                GraphId::try_from_components(level, max_tile_id + 1, 0)
+                    .unwrap()
+                    .file_path("gph"),
+                Err(InvalidGraphIdError::GraphTileId)
+            );
+        }
+        // Levels 4 to 7 fit in the bit field, but they have no tiling system.
+        assert_eq!(
+            GraphId::try_from_components(5, 0, 0)
+                .unwrap()
+                .file_path("gph"),
+            Err(InvalidGraphIdError::Level)
         );
     }
 }

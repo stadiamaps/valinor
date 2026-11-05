@@ -4,7 +4,9 @@ use crate::graph_tile::{GraphTileBuildError, GraphTileBuilder};
 use crate::graph_tile::{GraphTileView, handles::OwnedGraphTileHandle};
 use crate::spatial::bbox_with_center;
 use crate::tile_hierarchy::STANDARD_LEVELS;
-use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, LockTable};
+use crate::tile_provider::{
+    GraphTileProvider, GraphTileProviderError, LockTable, TILE_FILE_EXTENSION,
+};
 use geo::{CoordFloat, Point};
 use lru::LruCache;
 use num_traits::FromPrimitive;
@@ -124,7 +126,9 @@ impl DirectoryGraphTileProvider {
     ///
     /// NOTE: This function assumes that the graph ID is already a base ID.
     fn path_for_graph_id(&self, graph_id: GraphId) -> Result<PathBuf, InvalidGraphIdError> {
-        Ok(self.base_directory.join(graph_id.file_path("gph")?))
+        Ok(self
+            .base_directory
+            .join(graph_id.file_path(TILE_FILE_EXTENSION)?))
     }
 }
 
@@ -176,6 +180,28 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
         Ok(tile)
     }
 
+    /// The size comes from the metadata of the tile file, so this reads no tile data.
+    ///
+    /// The size is the size of the file at the time of the call.
+    /// If the file changes after the provider caches the tile,
+    /// the size and the cached tile do not agree.
+    fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
+        let base_graph_id = graph_id.tile_base_id();
+        let size = match std::fs::metadata(self.path_for_graph_id(base_graph_id)?) {
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            Ok(_) => return Err(GraphTileProviderError::TileDoesNotExist),
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                return Err(GraphTileProviderError::TileDoesNotExist);
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        u32::try_from(size).map_err(|_| GraphTileProviderError::TileTooLarge {
+            graph_id: base_graph_id,
+            size,
+        })
+    }
+
     fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
         &self,
         center: Point<N>,
@@ -202,21 +228,19 @@ mod test {
     use super::DirectoryGraphTileProvider;
     use crate::GraphId;
     use crate::graph_tile::GraphTile;
+    use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
-    use crate::tile_provider::GraphTileProvider;
+    use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, TILE_FILE_EXTENSION};
     use core::num::NonZeroUsize;
     use rand::{
         distr::{Distribution, Uniform},
         rng,
     };
     use std::collections::HashSet;
-    use std::path::PathBuf;
 
     #[test]
     fn test_get_tile() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile = provider
@@ -232,9 +256,7 @@ mod test {
     fn test_get_opp_edge() {
         let mut rng = rng();
 
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile = provider
@@ -264,9 +286,7 @@ mod test {
 
     #[test]
     fn test_get_shortcut_fixture() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
 
         // This test relies on the state of the andorra-tiles fixtures.
@@ -310,9 +330,7 @@ mod test {
     #[cfg(not(miri))]
     #[test]
     fn test_level_zero_shortcut_sanity() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
 
         let base_id = GraphId::try_from_components(0, 3015, 0).unwrap();
@@ -393,9 +411,7 @@ mod test {
         // how the tile structure works.
         // Specifically, there is only a single "copy" of a feature in the routing graph,
         // and all features of a specific road class exist in specific tile levels.
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures")
-            .join("andorra-tiles");
+        let base = test_fixtures::andorra_tiles_dir();
         let provider = DirectoryGraphTileProvider::new(base, NonZeroUsize::new(1).unwrap());
         let graph_ids = vec![
             GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID"),
@@ -440,5 +456,93 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_tile_size_matches_view_bytes() {
+        let provider =
+            DirectoryGraphTileProvider::new(test_fixtures::andorra_tiles_dir(), NonZeroUsize::MIN);
+        // The feature index is not zero, so the provider must use the base ID of the tile.
+        let graph_id = GraphId::try_from_components(0, 3015, 1).expect("Unable to create graph ID");
+
+        let size = provider
+            .tile_size(graph_id)
+            .expect("Unable to get the tile size");
+        let tile_bytes_len = provider
+            .with_tile_containing(graph_id, |tile| tile.tile_bytes().len())
+            .expect("Unable to get tile");
+        assert_eq!(
+            usize::try_from(size).expect("The size fits in a usize"),
+            tile_bytes_len,
+            "The tile size must be the length of the tile bytes"
+        );
+    }
+
+    #[test]
+    fn test_tile_size_of_missing_tile() {
+        let provider =
+            DirectoryGraphTileProvider::new(test_fixtures::andorra_tiles_dir(), NonZeroUsize::MIN);
+        // This tile is not in the Andorra extract.
+        let graph_id = GraphId::try_from_components(0, 0, 0).expect("Unable to create graph ID");
+
+        assert!(
+            matches!(
+                provider.tile_size(graph_id),
+                Err(GraphTileProviderError::TileDoesNotExist)
+            ),
+            "A tile without a file must not exist"
+        );
+    }
+
+    #[test]
+    fn test_tile_size_of_directory_at_tile_path() {
+        let base = tempfile::tempdir().expect("Unable to create a temporary directory");
+        let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
+        let tile_path = base.path().join(
+            graph_id
+                .file_path(TILE_FILE_EXTENSION)
+                .expect("Unable to get the tile path"),
+        );
+        std::fs::create_dir_all(tile_path).expect("Unable to create a directory at the tile path");
+        let provider =
+            DirectoryGraphTileProvider::new(base.path().to_path_buf(), NonZeroUsize::MIN);
+
+        assert!(
+            matches!(
+                provider.tile_size(graph_id),
+                Err(GraphTileProviderError::TileDoesNotExist)
+            ),
+            "A directory at the tile path must not be a tile"
+        );
+    }
+
+    // On Unix, a sparse file of this size uses almost no disk space.
+    #[cfg(all(unix, not(miri)))]
+    #[test]
+    fn test_tile_size_too_large() {
+        let base = tempfile::tempdir().expect("Unable to create a temporary directory");
+        let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
+        let tile_path = base.path().join(
+            graph_id
+                .file_path(TILE_FILE_EXTENSION)
+                .expect("Unable to get the tile path"),
+        );
+        let parent = tile_path.parent().expect("The tile path has a parent");
+        std::fs::create_dir_all(parent).expect("Unable to create the tile directory");
+        let file_len = u64::from(u32::MAX) + 1;
+        std::fs::File::create(&tile_path)
+            .and_then(|file| file.set_len(file_len))
+            .expect("Unable to create a large sparse file");
+        let provider =
+            DirectoryGraphTileProvider::new(base.path().to_path_buf(), NonZeroUsize::MIN);
+
+        assert!(
+            matches!(
+                provider.tile_size(graph_id),
+                Err(GraphTileProviderError::TileTooLarge { graph_id: id, size })
+                    if id == graph_id && size == file_len
+            ),
+            "A tile file larger than u32::MAX bytes must be an error"
+        );
     }
 }

@@ -1,0 +1,32 @@
+info:
+  name: encamp-to-canillo-auto
+  type: http
+  seq: 3
+
+http:
+  method: POST
+  url: "{{baseUrl}}/route"
+  body:
+    type: json
+    data: |-
+      {
+        "locations": [
+          {
+            "lat": 42.536,
+            "lon": 1.5836
+          },
+          {
+            "lat": 42.5676,
+            "lon": 1.5976
+          }
+        ],
+        "costing": "auto",
+        "units": "kilometers"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
