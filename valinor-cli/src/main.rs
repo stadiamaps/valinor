@@ -74,7 +74,15 @@ mod tests {
 
     #[test]
     fn extract_tiles_reject_malformed_values() {
-        for input in ["2", "2/763926/7", "2/abc", "8/0"] {
+        for input in [
+            "2",
+            "2/763926/7",
+            "2/abc",
+            "x/0",
+            "8/0",
+            "256/0",
+            "0/4194304",
+        ] {
             let error = Cli::try_parse_from([
                 "valinor-cli",
                 "extract",
@@ -98,6 +106,16 @@ mod tests {
                 panic!("expected the get-edge subcommand");
             };
             assert_eq!(args.graph_id, expected);
+        }
+    }
+
+    #[test]
+    fn get_edge_rejects_malformed_graph_ids() {
+        // The last value has a level of 8, which does not fit in the 3-bit level field.
+        for input in ["2/762485", "2/762485/42/0", "2/762485/x", "x/0/0", "8/0/0"] {
+            let error = Cli::try_parse_from(["valinor-cli", "get-edge", "valhalla.json", input])
+                .expect_err("a malformed graph ID is rejected");
+            assert!(error.to_string().contains(input), "{input}: {error}");
         }
     }
 

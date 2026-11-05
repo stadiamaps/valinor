@@ -10,7 +10,7 @@ use std::{
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use clap::Args;
 use tempfile::NamedTempFile;
 use valhalla_graphtile::GraphId;
@@ -41,9 +41,19 @@ pub(crate) struct ExtractArgs {
         value_name = "LEVEL/TILE_ID",
         required = true,
         value_delimiter = ',',
-        value_parser = GraphId::parse_tile
+        value_parser = parse_tile
     )]
     pub(crate) tiles: Vec<GraphId>,
+}
+
+/// Parses the base graph ID of a tile from the `level/tile_id` form.
+fn parse_tile(input: &str) -> anyhow::Result<GraphId> {
+    let (level, tile_id) = input
+        .split_once('/')
+        .ok_or_else(|| anyhow!("expected the level/tile_id form"))?;
+    let level = level.parse().context("invalid level")?;
+    let tile_id = tile_id.parse().context("invalid tile id")?;
+    Ok(GraphId::try_from_components(level, tile_id, 0)?)
 }
 
 /// A successful extract, as reported on stderr.
