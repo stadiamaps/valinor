@@ -24,7 +24,26 @@ pub(crate) struct GetEdgeArgs {
     valhalla_config: PathBuf,
 
     /// Graph ID (u64) or slash-form level/tile_id/index
+    #[arg(value_parser = parse_graph_id)]
     pub(crate) graph_id: GraphId,
+}
+
+/// Parses a graph ID from its packed `u64` value or from the `level/tile_id/index` form.
+fn parse_graph_id(input: &str) -> anyhow::Result<GraphId> {
+    if let Ok(id) = input.parse::<u64>() {
+        return Ok(GraphId::try_from_id(id)?);
+    }
+
+    let parts: Vec<&str> = input.split('/').collect();
+    let [level, tile_id, index] = parts[..] else {
+        return Err(anyhow!(
+            "Unrecognized graph id format. Use a u64 integer or level/tile_id/index"
+        ));
+    };
+    let level = level.parse().context("invalid level in graph id")?;
+    let tile_id = tile_id.parse().context("invalid tile id in graph id")?;
+    let index = index.parse().context("invalid index in graph id")?;
+    Ok(GraphId::try_from_components(level, tile_id, index)?)
 }
 
 #[derive(Debug, Clone)]
