@@ -55,7 +55,7 @@ pub enum GraphTileProviderError {
     InvalidIndexBin(#[from] InvalidIndexBinError),
     #[error("Unsupported tile version; this may or may not be compatible.")]
     UnsupportedTileVersion,
-    #[error("the tile file for {graph_id} has {size} bytes, which is more than a tile can have")]
+    #[error("the tile file for {graph_id} has {size} bytes, but tiles are capped at 4GiB")]
     TileTooLarge { graph_id: GraphId, size: u64 },
 }
 

@@ -176,7 +176,7 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
         Ok(tile)
     }
 
-    /// The size comes from the metadata of the tile file, so this reads no tile data.
+    /// The size comes from the filesystem metadata of the tile file. It does not read the file.
     ///
     /// The size is the size of the file at the time of the call.
     /// If the file changes after the provider caches the tile,
@@ -513,7 +513,6 @@ mod test {
         );
     }
 
-    // On Unix, a sparse file of this size uses almost no disk space.
     #[cfg(all(unix, not(miri)))]
     #[test]
     fn test_tile_size_too_large() {
@@ -526,6 +525,7 @@ mod test {
         );
         let parent = tile_path.parent().expect("The tile path has a parent");
         std::fs::create_dir_all(parent).expect("Unable to create the tile directory");
+        // On most modern file systems, this will be a sparse file and won't pre-allocate space.
         let file_len = u64::from(u32::MAX) + 1;
         std::fs::File::create(&tile_path)
             .and_then(|file| file.set_len(file_len))
