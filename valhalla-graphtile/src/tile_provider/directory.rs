@@ -176,11 +176,7 @@ impl GraphTileProvider for DirectoryGraphTileProvider {
         Ok(tile)
     }
 
-    /// The size comes from the filesystem metadata of the tile file. It does not read the file.
-    ///
-    /// The size is the size of the file at the time of the call.
-    /// If the file changes after the provider caches the tile,
-    /// the size and the cached handle do not agree.
+    /// Gets the tile's size in bytes without a filesystem read or tile decode.
     fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
         let base_graph_id = graph_id.tile_base_id();
         let size = match std::fs::metadata(self.path_for_graph_id(base_graph_id)?) {

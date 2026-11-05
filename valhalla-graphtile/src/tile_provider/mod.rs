@@ -113,16 +113,11 @@ pub trait GraphTileProvider {
         graph_id: GraphId,
     ) -> Result<Self::TileHandle, GraphTileProviderError>;
 
-    /// Gets the size in bytes of the tile containing the given graph ID,
-    /// without reading or decoding the tile.
-    ///
-    /// While the tile data does not change, the size is the length of
-    /// [`GraphTileHandle::tile_bytes`] for the handle of the same tile.
+    /// Gets the tile's size in bytes without a filesystem read or tile decode.
     ///
     /// # Performance
     ///
     /// Implementations SHOULD get the size from an index or from file metadata.
-    /// A caller can then get the sizes of many tiles before it reads any of them.
     ///
     /// # Errors
     ///
