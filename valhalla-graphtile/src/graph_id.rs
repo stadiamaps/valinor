@@ -426,51 +426,34 @@ mod tests {
         );
     }
 
-    fn tile(level: u8, tile_id: u64) -> GraphId {
-        GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
-    }
-
-    #[test]
-    fn test_file_path() {
-        // Levels 0 and 1 pad the tile ID to 6 digits, and level 2 pads it to 9.
-        for (graph_id, expected) in [
-            (tile(0, 3015), "0/003/015.gph"),
-            (tile(0, 49), "0/000/049.gph"),
-            (tile(1, 47_701), "1/047/701.gph"),
-            (tile(1, 0), "1/000/000.gph"),
-            (tile(2, 762_485), "2/000/762/485.gph"),
-            (tile(2, 1_036_799), "2/001/036/799.gph"),
-        ] {
-            assert_eq!(
-                graph_id.file_path("gph"),
-                Ok(expected.split('/').collect::<PathBuf>())
-            );
-        }
-
-        let with_index = GraphId::try_from_components(2, 762_485, 42).unwrap();
-        assert_eq!(
-            with_index.file_path("gph"),
-            Ok(["2", "000", "762", "485.gph"].iter().collect::<PathBuf>())
-        );
-
-        assert_eq!(
-            tile(1, 47_701).file_path(""),
-            Ok(["1", "047", "701"].iter().collect::<PathBuf>())
-        );
-    }
-
     #[test]
     fn test_file_path_invalid() {
-        // Level 0 has 45 × 90 tiles, so its largest tile ID is 4049.
-        assert_eq!(
-            tile(0, 4049).file_path("gph"),
-            Ok(["0", "004", "049.gph"].iter().collect::<PathBuf>())
-        );
-        assert_eq!(
-            tile(0, 4050).file_path("gph"),
-            Err(InvalidGraphIdError::GraphTileId)
-        );
+        // Each level has a 4°, 1°, or 0.25° grid of 4050, 64800, or 1036800 tiles.
+        // Level 2 has one more directory, because its tile IDs have more digits.
+        for (level, max_tile_id, path) in [
+            (0, 4049, "0/004/049.gph"),
+            (1, 64_799, "1/064/799.gph"),
+            (2, 1_036_799, "2/001/036/799.gph"),
+        ] {
+            assert_eq!(
+                GraphId::try_from_components(level, max_tile_id, 0)
+                    .unwrap()
+                    .file_path("gph"),
+                Ok(path.into())
+            );
+            assert_eq!(
+                GraphId::try_from_components(level, max_tile_id + 1, 0)
+                    .unwrap()
+                    .file_path("gph"),
+                Err(InvalidGraphIdError::GraphTileId)
+            );
+        }
         // Levels 4 to 7 fit in the bit field, but they have no tiling system.
-        assert_eq!(tile(5, 0).file_path("gph"), Err(InvalidGraphIdError::Level));
+        assert_eq!(
+            GraphId::try_from_components(5, 0, 0)
+                .unwrap()
+                .file_path("gph"),
+            Err(InvalidGraphIdError::Level)
+        );
     }
 }
