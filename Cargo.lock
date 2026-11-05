@@ -2425,6 +2425,7 @@ dependencies = [
  "self_cell",
  "serde",
  "tar",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "trig-const",
