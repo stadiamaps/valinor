@@ -12,6 +12,8 @@ use std::sync::Arc;
 use thiserror::Error;
 use zerocopy::{FromBytes, I16, LE, U32};
 
+#[cfg(test)]
+use crate::test_fixtures;
 use enumset::EnumSet;
 use geo::{CoordFloat, Point, coord};
 use num_traits::FromPrimitive;
@@ -932,10 +934,7 @@ static TEST_GRAPH_TILE_L0: LazyLock<OwnedGraphTileHandle> = LazyLock::new(|| {
     let relative_path = TEST_GRAPH_TILE_ID_L0
         .file_path("gph")
         .expect("Unable to get relative path");
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures")
-        .join("andorra-tiles")
-        .join(relative_path);
+    let path = test_fixtures::andorra_tiles_dir().join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
     OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
@@ -946,10 +945,7 @@ static TEST_GRAPH_TILE_L2: LazyLock<OwnedGraphTileHandle> = LazyLock::new(|| {
     let relative_path = TEST_GRAPH_TILE_ID_L2
         .file_path("gph")
         .expect("Unable to get relative path");
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures")
-        .join("andorra-tiles")
-        .join(relative_path);
+    let path = test_fixtures::andorra_tiles_dir().join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
     OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
@@ -971,10 +967,7 @@ static TEST_GRAPH_TILE_WITH_FLOW: LazyLock<OwnedGraphTileHandle> = LazyLock::new
     let relative_path = TEST_GRAPH_TILE_ID_L0
         .file_path("gph")
         .expect("Unable to get relative path");
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures")
-        .join("andorra-tiles-with-traffic")
-        .join(relative_path);
+    let path = test_fixtures::andorra_tiles_with_traffic_dir().join(relative_path);
     let bytes = std::fs::read(path).expect("Unable to read file");
 
     OwnedGraphTileHandle::try_from(bytes).expect("Unable to get tile")
