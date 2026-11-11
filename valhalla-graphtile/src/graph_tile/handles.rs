@@ -15,15 +15,16 @@ use memmap2::MmapRaw;
 use self_cell::self_cell;
 use std::sync::Arc;
 
-/// An owned handle to a decoded graph tile, which keeps the bytes that it decoded.
+/// An owned handle to a decoded graph tile.
 pub trait GraphTileHandle {
-    /// Returns a view of the decoded tile.
+    /// Returns a view over the decoded tile.
     fn tile_view(&'_ self) -> GraphTileView<'_>;
 
-    /// Returns the bytes of the tile, exactly as the handle got them.
+    /// Returns the bytes of the tile.
     ///
-    /// The handle decoded the view of [`GraphTileHandle::tile_view`] from these bytes,
-    /// so they are a valid graph tile.
+    /// These are guaranteed by construction to be a valid graph tile.
+    /// Unless you are doing very evil things with memory that you shouldn't be touching.
+    /// Don't do that.
     fn tile_bytes(&self) -> &[u8];
 }
 
@@ -64,6 +65,7 @@ impl TryFrom<Vec<u8>> for OwnedGraphTileHandle {
 impl GraphTileHandle for OwnedGraphTileHandle {
     #[inline]
     fn tile_view(&'_ self) -> GraphTileView<'_> {
+        // Cloning this struct is cheap; it's just references (see commend on `GraphTileView`).
         self.borrow_dependent().clone()
     }
 
@@ -312,6 +314,7 @@ impl MmapGraphTileHandle {
 impl GraphTileHandle for MmapGraphTileHandle {
     #[inline]
     fn tile_view(&'_ self) -> GraphTileView<'_> {
+        // Cloning this struct is cheap; it's just references (see commend on `GraphTileView`).
         self.borrow_dependent().clone()
     }
 
