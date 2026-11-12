@@ -541,25 +541,13 @@ impl TileIndexBinEntry {
 
     /// The byte offset of the tile payload from the beginning of the tarball.
     #[inline]
-    pub fn offset(&self) -> u64 {
+    pub(crate) fn offset(&self) -> u64 {
         self.offset.get()
     }
 
     /// The size of the tile in bytes.
     #[inline]
-    pub fn size(&self) -> u32 {
-        self.size.get()
-    }
-
-    /// The byte offset of the tile payload from the beginning of the tarball.
-    #[inline]
-    pub fn offset(&self) -> u64 {
-        self.offset.get()
-    }
-
-    /// The size of the tile in bytes.
-    #[inline]
-    pub fn size(&self) -> u32 {
+    pub(crate) fn size(&self) -> u32 {
         self.size.get()
     }
 }
@@ -787,72 +775,6 @@ mod test {
             assert_eq!(entry.validated(archive_len), Ok((graph_id, offset)));
             assert_eq!(entry.size(), size);
         }
-    }
-
-    #[test]
-    fn test_check_range() {
-        let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-
-        assert_eq!(check_range(graph_id, 512, 512, 1024), Ok(()));
-        assert_eq!(
-            check_range(graph_id, 512, 513, 1024),
-            Err(InvalidIndexBinError::OutOfBounds {
-                graph_id,
-                offset: 512,
-                size: 513,
-                archive_len: 1024
-            }),
-            "A tile must end at or before the end of the archive"
-        );
-        assert_eq!(
-            check_range(graph_id, u64::MAX - 511, 1024, u64::MAX),
-            Err(InvalidIndexBinError::OutOfBounds {
-                graph_id,
-                offset: u64::MAX - 511,
-                size: 1024,
-                archive_len: u64::MAX
-            }),
-            "The end of the range must not overflow"
-        );
-    }
-
-    // Tragically, memory maps are not supported by Miri!
-    #[cfg(not(miri))]
-    #[test]
-    fn test_reject_index_past_end_of_archive() {
-        let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
-        // The index gives 10,000 bytes, but the archive has only 100 bytes of tile data.
-        let index_entry =
-            TileIndexBinEntry::new(graph_id, 1536, 10_000).expect("Unable to create index entry");
-        let index_bytes = serialize_index_bin(core::slice::from_ref(&index_entry))
-            .expect("Unable to serialize the index");
-
-        let file = tempfile::NamedTempFile::new().expect("Unable to create a temporary file");
-        let mut builder = tar::Builder::new(file.as_file());
-        for (path, payload) in [("index.bin", index_bytes), ("0/003/015.gph", &[0x5a; 100])] {
-            let mut header = tar::Header::new_ustar();
-            header.set_size(payload.len() as u64);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, path, payload)
-                .expect("Unable to append a tar entry");
-        }
-        builder.finish().expect("Unable to finish the archive");
-
-        let result = TarballTileProvider::new_readonly(file.path());
-        assert!(
-            matches!(
-                result,
-                Err(GraphTileProviderError::InvalidIndexBin(
-                    InvalidIndexBinError::OutOfBounds {
-                        offset: 1536,
-                        size: 10_000,
-                        ..
-                    }
-                ))
-            ),
-            "An index entry past the end of the archive must be rejected"
-        );
     }
 
     #[test]

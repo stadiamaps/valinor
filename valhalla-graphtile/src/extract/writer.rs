@@ -128,15 +128,13 @@ where
     let index_bytes = serialize_index_bin(&layout.entries)?;
     write_entry(&mut dest, INDEX_BIN_FILE_NAME, index_bytes)?;
 
-    for entry in &layout.entries {
-        let graph_id = entry.graph_id()?;
+    for &(graph_id, expected) in &manifest {
         let path = graph_id.file_path(TILE_FILE_EXTENSION)?;
         let tile = provider
             .get_handle_for_tile_containing(graph_id)
             .map_err(|source| ExtractWriteError::from_provider(graph_id, source))?;
 
         let tile_bytes = tile.tile_bytes();
-        let expected = entry.size();
         if tile_bytes.len() != expected as usize {
             return Err(ExtractWriteError::SizeMismatch {
                 graph_id,
@@ -405,20 +403,11 @@ mod tests {
         for ((entry, (graph_id, size)), offset) in
             layout.entries.iter().zip(manifest).zip(expected_offsets)
         {
+            let expected =
+                TileIndexBinEntry::new(graph_id, offset, size).expect("the entry is well-formed");
             assert_eq!(
-                entry.graph_id(),
-                Ok(graph_id),
-                "The layout must keep the order of the manifest"
-            );
-            assert_eq!(
-                entry.offset(),
-                offset,
-                "The payload of {graph_id} must start one block after its header"
-            );
-            assert_eq!(
-                entry.size(),
-                size,
-                "The index entry of {graph_id} must have its size"
+                *entry, expected,
+                "The entry of {graph_id} must keep the manifest order and size, and its payload must start one block after its header"
             );
         }
 
