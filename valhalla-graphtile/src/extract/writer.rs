@@ -1,12 +1,4 @@
-//! A streaming tar writer for tile extracts.
-//!
-//! The writer computes every offset from the tile sizes before it writes,
-//! and writes the archive in one pass. The archive contains:
-//!
-//! 1. `index.bin`, which Valhalla requires as the first entry of a remote tarball.
-//! 2. The tiles at the paths of [`GraphId::file_path`] with `/` separators,
-//!    in ascending (level, tile index) order.
-//! 3. The two-block end-of-archive marker.
+//! Writes tile extracts with `index.bin` followed by tiles in ascending (level, tile ID) order.
 
 use crate::GraphId;
 use crate::graph_id::InvalidGraphIdError;
@@ -21,11 +13,9 @@ use std::path::Path;
 use tar::{EntryType, Header};
 use thiserror::Error;
 
-/// Zeros for the payload padding and the end-of-archive marker.
 #[expect(clippy::cast_possible_truncation, reason = "512 fits in every usize")]
 const ZERO_BLOCK: [u8; TAR_BLOCK_SIZE as usize] = [0; TAR_BLOCK_SIZE as usize];
 
-/// The length of the end-of-archive marker: two zero blocks.
 const END_OF_ARCHIVE_MARKER_LEN: u64 = 2 * TAR_BLOCK_SIZE;
 
 /// An error while writing a tile extract.
@@ -43,8 +33,7 @@ pub enum ExtractWriteError {
     /// A tile has no valid `index.bin` entry.
     #[error("invalid index.bin: {0}")]
     InvalidIndexBin(#[from] InvalidIndexBinError),
-    /// The length of a tile differs from the size that the provider reported,
-    /// for example because a tile file changed during the write.
+    /// The tile length differs from the size that the provider reported.
     #[error(
         "the provider gave {actual} bytes for tile {graph_id}, but it reported a size of {expected} bytes"
     )]
@@ -64,13 +53,12 @@ pub enum ExtractWriteError {
         /// The error from the provider.
         source: GraphTileProviderError,
     },
-    /// Writing to the destination failed.
+    /// A destination write or flush failed.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
 
 impl ExtractWriteError {
-    /// Wraps an error from the provider for the tile `graph_id`.
     fn from_provider(graph_id: GraphId, source: GraphTileProviderError) -> Self {
         match source {
             GraphTileProviderError::TileDoesNotExist => Self::MissingTile(graph_id),
@@ -79,33 +67,32 @@ impl ExtractWriteError {
     }
 }
 
-/// Writes a deterministic extract with the tiles that contain `tile_ids` from `provider`
-/// into `dest`, and returns the number of bytes written.
+/// Writes the tiles containing `tile_ids` from `provider` to `dest` as a deterministic tar extract.
+/// Returns the number of bytes written.
+///
+/// Ignores duplicate tile IDs and feature indexes.
+/// Writes `index.bin` first, then tiles in ascending (level, tile ID) order with `/` path separators.
 ///
 /// For a [`DirectoryGraphTileProvider`](crate::tile_provider::DirectoryGraphTileProvider),
-/// the tile files must not change during the write,
-/// and the cache of the provider must not hold older versions of the tiles.
+/// tile files must remain unchanged during the write, and cached tiles must match the files.
 ///
 /// # Performance
 ///
-/// The writer makes three small writes for each tile, and it does not buffer them.
-/// Wrap a `dest` without a buffer, such as a [`File`](std::fs::File), in a
-/// [`BufWriter`](std::io::BufWriter).
+/// This function does not buffer writes to `dest`.
+/// Wrap an unbuffered destination in a [`BufWriter`](std::io::BufWriter).
 ///
 /// # Errors
 ///
-/// The writer finds these errors before it writes to `dest`:
+/// Returns [`ExtractWriteError::NoTiles`] if `tile_ids` is empty,
+/// [`ExtractWriteError::MissingTile`] if a tile is absent,
+/// or [`ExtractWriteError::Provider`] if the provider cannot get a tile's size or contents.
+/// Returns [`ExtractWriteError::InvalidIndexBin`] for an invalid index entry,
+/// or [`ExtractWriteError::InvalidGraphId`] for an invalid tile path.
+/// Returns [`ExtractWriteError::SizeMismatch`] if a tile's length differs from its reported size,
+/// or [`ExtractWriteError::Io`] if a destination write or flush fails.
 ///
-/// - [`ExtractWriteError::NoTiles`] if `tile_ids` is empty.
-/// - [`ExtractWriteError::MissingTile`] if the provider does not have a tile.
-/// - [`ExtractWriteError::Provider`] if the provider cannot get the size of a tile.
-///
-/// The writer finds these errors during the write, so `dest` then contains a partial archive:
-///
-/// - [`ExtractWriteError::MissingTile`] or [`ExtractWriteError::Provider`]
-///   if the provider cannot read or decode a tile.
-/// - [`ExtractWriteError::SizeMismatch`] if the length of a tile differs from its size.
-/// - [`ExtractWriteError::Io`] if a write to `dest` fails.
+/// Empty input and tile size errors leave `dest` unchanged.
+/// Other errors can leave a partial archive in `dest`.
 pub fn write_extract<P, I, W>(
     provider: &P,
     tile_ids: I,
@@ -120,7 +107,7 @@ where
         .into_iter()
         .map(|graph_id| graph_id.tile_base_id())
         .collect();
-    // `GraphId` orders higher levels first, so it cannot give the archive order.
+    // Archive order requires ascending levels. `GraphId::Ord` uses descending levels.
     tiles.sort_unstable_by_key(|graph_id| (graph_id.level(), graph_id.tile_id()));
     tiles.dedup();
     if tiles.is_empty() {
@@ -167,10 +154,6 @@ where
     Ok(layout.total_len)
 }
 
-/// Where each tile goes in an extract.
-///
-/// The writer must write `index.bin` before the tiles,
-/// so it computes the offset of every tile from the tile sizes before it writes.
 #[derive(Debug)]
 struct ExtractLayout {
     /// The `index.bin` entry of each tile, in archive order.
@@ -180,11 +163,8 @@ struct ExtractLayout {
 }
 
 impl ExtractLayout {
-    /// Computes the layout for `(GraphId, size)` pairs of base tile IDs in archive order.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `manifest` contains an ID that is not a base tile ID.
+    /// Computes the layout from `manifest` pairs of (base tile ID, size in bytes), in archive order.
+    /// Rejects IDs with feature indexes or reserved bits.
     fn from_manifest(manifest: &[(GraphId, u32)]) -> Result<Self, InvalidIndexBinError> {
         let index_len = (INDEX_ENTRY_SIZE * manifest.len()) as u64;
         let mut next_entry_offset = entry_len(index_len);
@@ -209,13 +189,12 @@ const fn entry_len(payload_len: u64) -> u64 {
     TAR_BLOCK_SIZE + payload_len.next_multiple_of(TAR_BLOCK_SIZE)
 }
 
-/// Writes a tar entry for `payload` at `path`.
 fn write_entry<W: Write>(
     dest: &mut W,
     path: impl AsRef<Path>,
     payload: &[u8],
 ) -> std::io::Result<()> {
-    // Keep all metadata fixed, so that the same tiles always give the same bytes.
+    // Fixed metadata makes the archive reproducible.
     let mut header = Header::new_ustar();
     header.set_entry_type(EntryType::Regular);
     header.set_path(path)?;
@@ -260,11 +239,8 @@ mod tests {
     /// The Andorra tile directory, with sizes and read errors that a test can change.
     struct TestProvider {
         inner: DirectoryGraphTileProvider,
-        /// Sizes which `tile_size` reports in place of the real sizes.
         reported_sizes: HashMap<GraphId, u32>,
-        /// Tiles whose size the provider fails to get.
         size_failures: HashSet<GraphId>,
-        /// Tiles which the provider has, but fails to read.
         read_failures: HashSet<GraphId>,
     }
 
@@ -327,7 +303,6 @@ mod tests {
         }
     }
 
-    /// Returns the raw header path and the payload offset of each entry.
     fn read_entries(archive_bytes: &[u8]) -> Vec<(String, u64)> {
         Archive::new(archive_bytes)
             .entries()
@@ -353,8 +328,6 @@ mod tests {
         index_bytes
     }
 
-    /// Checks an archive with the `tar` crate as an independent reader,
-    /// and checks each tile against the tile file in `tile_dir`.
     fn check_archive(archive_bytes: &[u8], expected_tiles: &[GraphId], tile_dir: &Path) {
         assert!(
             archive_bytes.len().is_multiple_of(ZERO_BLOCK.len()),
@@ -412,7 +385,6 @@ mod tests {
     fn test_layout_offsets() {
         const B: u64 = TAR_BLOCK_SIZE;
 
-        // Sizes at, below, and above a block boundary, in archive order.
         let manifest = [
             (tile((0, 3015)), 512),
             (tile((1, 47_700)), 511),
@@ -422,15 +394,8 @@ mod tests {
         ];
         let layout = ExtractLayout::from_manifest(&manifest).expect("the manifest is well-formed");
 
-        // The index entry (a header and 5 × 16 bytes) fills blocks 0 and 1.
-        // Each payload starts one block after its header.
-        let expected_offsets = [
-            3 * B,  // header at block 2, payload is 1 block
-            5 * B,  // header at block 4, payload is padded to 1 block
-            7 * B,  // header at block 6, payload is padded to 2 blocks
-            10 * B, // header at block 9, payload is 2 blocks
-            13 * B, // header at block 12, payload is padded to 1 block
-        ];
+        // The index occupies blocks 0 and 1. Each tile header precedes its payload by one block.
+        let expected_offsets = [3 * B, 5 * B, 7 * B, 10 * B, 13 * B];
 
         assert_eq!(
             layout.entries.len(),
@@ -573,7 +538,6 @@ mod tests {
         );
     }
 
-    /// Copies the small Andorra tile into a new tile directory.
     fn copy_small_tile() -> (tempfile::TempDir, std::path::PathBuf) {
         let base = tempfile::tempdir().expect("Unable to create a temporary directory");
         let relative_path = test_fixtures::smallest_andorra_tile()
@@ -598,7 +562,6 @@ mod tests {
             .expect("Unable to get tile");
         let cached_len = cached.tile_bytes().len();
 
-        // The file grows, but the cache of the provider keeps the old bytes.
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&tile_path)
@@ -708,7 +671,6 @@ mod tests {
             let mut in_order = Vec::new();
             write_extract(&provider, andorra_tiles(), &mut in_order).expect("first write succeeds");
 
-            // Reverse order, with every tile twice: once as a base ID and once with a feature index.
             let scrambled = andorra_tiles().into_iter().rev().flat_map(|graph_id| {
                 let with_feature_index = graph_id
                     .with_feature_index(42)
@@ -731,7 +693,6 @@ mod tests {
                 TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
                     .expect("Unable to init the source tile provider");
 
-            // Out of archive order, and with one nonzero feature index.
             let tile_ids = [
                 tile((2, 763_926)),
                 tile((0, 3015)),
@@ -801,7 +762,6 @@ mod tests {
 
             #[test]
             fn test_archive_matches_independent_reader(
-                // Andorra tiles in any order, with duplicates and feature indexes.
                 tile_ids in vec((select(&ANDORRA_TILES[..]), 0u64..4), 1..12)
             ) {
                 let tile_ids: Vec<GraphId> = tile_ids

@@ -21,9 +21,7 @@ pub(crate) fn andorra_tiles_dir() -> PathBuf {
     fixture("andorra-tiles")
 }
 
-/// The base graph ID of the smallest tile in [`andorra_tiles_dir`].
-///
-/// Tests that run under Miri use this tile to stay fast.
+/// Returns the base graph ID of the smallest Andorra tile to limit Miri test time.
 pub(crate) fn smallest_andorra_tile() -> GraphId {
     static SMALLEST: LazyLock<GraphId> = LazyLock::new(|| {
         let path = WalkDir::new(andorra_tiles_dir())
