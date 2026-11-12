@@ -135,7 +135,7 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
                 graph_id,
                 TileOffset {
                     offset,
-                    size: entry.size.get(),
+                    size: entry.size(),
                 },
             );
         }
@@ -519,27 +519,20 @@ impl TileIndexBinEntry {
     ///
     /// Call this before you use an entry from [`parse_index_bin`], which does not check the values.
     fn validated(&self, archive_len: u64) -> Result<(GraphId, u64), InvalidIndexBinError> {
-        let graph_id = self.graph_id()?;
-        let offset = self.offset.get();
-        check_offset(graph_id, offset)?;
-        check_range(graph_id, offset, self.size.get(), archive_len)?;
-
-        Ok((graph_id, offset))
-    }
-
-    /// The graph ID of the indexed tile.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the stored tile ID has nonzero feature index bits.
-    pub fn graph_id(&self) -> Result<GraphId, InvalidIndexBinError> {
         // SAFETY: We know that the bit field cannot contain a value
         // larger than the max allowed value (it's limited to 46 bits).
         // Therefore, this is guaranteed to be a valid Graph ID bit pattern.
         let graph_id = unsafe { GraphId::from_id_unchecked(self.tile_id.into()) };
-        base_tile_id(graph_id)?;
 
-        Ok(graph_id)
+        // Call for the error generation side-effect in case the tile is not a base ID
+        // (this is obviously invalid).
+        let _ = base_tile_id(graph_id)?;
+
+        let offset = self.offset();
+        check_offset(graph_id, offset)?;
+        check_range(graph_id, offset, self.size(), archive_len)?;
+
+        Ok((graph_id, offset))
     }
 
     /// The byte offset of the tile payload from the beginning of the tarball.
@@ -761,32 +754,23 @@ mod test {
 
     #[test]
     fn test_parse_index_bin() {
-        let index_entries = parse_index_bin(INDEX_BIN_FIXTURE).expect("Unable ta parse fixture");
+        let index_entries = parse_index_bin(INDEX_BIN_FIXTURE).expect("Unable to parse fixture");
 
         assert_eq!(index_entries.len(), 3);
 
-        // All sizes were verified on disk from the original tiles when constructing the test
-
-        // First entry
-        assert_eq!(index_entries[0].offset.get(), 23040);
-        assert_eq!(index_entries[0].graph_id().unwrap(), unsafe {
-            GraphId::from_components_unchecked(0, 2540, 0)
-        });
-        assert_eq!(index_entries[0].size.get(), 1_181_852);
-
-        // Second entry
-        assert_eq!(index_entries[1].offset.get(), 1_206_784);
-        assert_eq!(index_entries[1].graph_id().unwrap(), unsafe {
-            GraphId::from_components_unchecked(0, 2628, 0)
-        });
-        assert_eq!(index_entries[1].size.get(), 92_104);
-
-        // Third entry
-        assert_eq!(index_entries[2].offset.get(), 1_300_480);
-        assert_eq!(index_entries[2].graph_id().unwrap(), unsafe {
-            GraphId::from_components_unchecked(0, 2629, 0)
-        });
-        assert_eq!(index_entries[2].size.get(), 1_809_704);
+        // All sizes were verified on disk from the original tiles when constructing the test.
+        let expected = [
+            (2540, 23040, 1_181_852),
+            (2628, 1_206_784, 92_104),
+            (2629, 1_300_480, 1_809_704),
+        ];
+        let archive_len = 1_300_480 + 1_809_704;
+        for (entry, (tile_id, offset, size)) in index_entries.iter().zip(expected) {
+            let graph_id =
+                GraphId::try_from_components(0, tile_id, 0).expect("Unable to create graph ID");
+            assert_eq!(entry.validated(archive_len), Ok((graph_id, offset)));
+            assert_eq!(entry.size(), size);
+        }
     }
 
     #[test]
@@ -862,7 +846,7 @@ mod test {
             .expect("Unable to create index entry");
 
         assert_eq!(entry.offset.get(), 23040);
-        assert_eq!(entry.graph_id().unwrap(), graph_id);
+        assert_eq!(entry.validated(23040 + 1_181_852), Ok((graph_id, 23040)));
         assert_eq!(entry.size.get(), 1_181_852);
     }
 
