@@ -19,6 +19,7 @@ mod tarball;
 mod traffic;
 
 use crate::graph_id::InvalidGraphIdError;
+use crate::graph_tile::handles::GraphTileHandle;
 use crate::graph_tile::{
     DirectedEdge, GraphTile, GraphTileDecodingError, GraphTileView, LookupError, NodeInfo,
     OpposingEdgeIndex,
@@ -54,6 +55,8 @@ pub enum GraphTileProviderError {
     InvalidIndexBin(#[from] InvalidIndexBinError),
     #[error("Unsupported tile version; this may or may not be compatible.")]
     UnsupportedTileVersion,
+    #[error("the tile file for {graph_id} has {size} bytes, but tiles are capped at 4GiB")]
+    TileTooLarge { graph_id: GraphId, size: u64 },
 }
 
 /// A generic trait for all graph tile providers.
@@ -66,7 +69,7 @@ pub trait GraphTileProvider {
     /// The tile handle type for owned handles.
     ///
     /// Code using the `GraphTileProvider` may rely on the handles being cheaply cloneable.
-    type TileHandle: GraphTile + Clone;
+    type TileHandle: GraphTile + GraphTileHandle + Clone;
 
     /// Gets the tile containing the given graph ID,
     /// and does some work in a closure which takes the reference as a parameter.
@@ -109,6 +112,19 @@ pub trait GraphTileProvider {
         &self,
         graph_id: GraphId,
     ) -> Result<Self::TileHandle, GraphTileProviderError>;
+
+    /// Gets the tile's size in bytes without a filesystem read or tile decode.
+    ///
+    /// # Performance
+    ///
+    /// Implementations SHOULD get the size from an index or from file metadata.
+    ///
+    /// # Errors
+    ///
+    /// If the provider does not have the tile,
+    /// this returns [`GraphTileProviderError::TileDoesNotExist`].
+    /// Other errors are possible, such as I/O errors.
+    fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError>;
 
     /// Enumerate base tile Graph IDs across all hierarchy levels that intersect a circle around
     /// `center` with radius `radius`.

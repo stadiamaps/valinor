@@ -15,8 +15,32 @@ use memmap2::MmapRaw;
 use self_cell::self_cell;
 use std::sync::Arc;
 
+/// An owned handle to a decoded graph tile.
 pub trait GraphTileHandle {
+    /// Returns a view over the decoded tile.
     fn tile_view(&'_ self) -> GraphTileView<'_>;
+
+    /// Returns the bytes of the tile.
+    ///
+    /// These are guaranteed by construction to be a valid graph tile.
+    /// Unless you are doing very evil things with memory that you shouldn't be touching.
+    /// Don't do that.
+    fn tile_bytes(&self) -> &[u8];
+}
+
+impl<T> GraphTileHandle for Arc<T>
+where
+    T: GraphTileHandle,
+{
+    #[inline]
+    fn tile_view(&'_ self) -> GraphTileView<'_> {
+        (**self).tile_view()
+    }
+
+    #[inline]
+    fn tile_bytes(&self) -> &[u8] {
+        (**self).tile_bytes()
+    }
 }
 
 self_cell! {
@@ -35,6 +59,19 @@ impl TryFrom<Vec<u8>> for OwnedGraphTileHandle {
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         OwnedGraphTileHandle::try_new(value, |data| GraphTileView::try_from(data.as_slice()))
+    }
+}
+
+impl GraphTileHandle for OwnedGraphTileHandle {
+    #[inline]
+    fn tile_view(&'_ self) -> GraphTileView<'_> {
+        // Cloning this struct is cheap; it's just references (see commend on `GraphTileView`).
+        self.borrow_dependent().clone()
+    }
+
+    #[inline]
+    fn tile_bytes(&self) -> &[u8] {
+        self.borrow_owner()
     }
 }
 
@@ -271,6 +308,24 @@ impl MmapGraphTileHandle {
             let tile_bytes = unsafe { ptr.as_tile_bytes() };
             GraphTileView::try_from(tile_bytes)
         })
+    }
+}
+
+impl GraphTileHandle for MmapGraphTileHandle {
+    #[inline]
+    fn tile_view(&'_ self) -> GraphTileView<'_> {
+        // Cloning this struct is cheap; it's just references (see commend on `GraphTileView`).
+        self.borrow_dependent().clone()
+    }
+
+    #[inline]
+    fn tile_bytes(&self) -> &[u8] {
+        // SAFETY: The decoded view borrows this same range of the memory map.
+        // The caller of `MmapGraphTileHandle::try_from` already accepted
+        // the conditions of `MmapTilePointer::as_tile_bytes` for the life of the handle.
+        // NB: We may need to introduce an alternate pattern if we deal with live traffic tiles,
+        // but this is fine for all current uses.
+        unsafe { self.borrow_owner().as_tile_bytes() }
     }
 }
 
