@@ -21,6 +21,11 @@ pub(crate) fn andorra_tiles_dir() -> PathBuf {
     fixture("andorra-tiles")
 }
 
+/// Returns the base graph ID of the tile at (`level`, `tile_id`).
+pub(crate) fn base_tile((level, tile_id): (u8, u64)) -> GraphId {
+    GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
+}
+
 /// Returns the base graph ID of the smallest Andorra tile to limit Miri test time.
 pub(crate) fn smallest_andorra_tile() -> GraphId {
     static SMALLEST: LazyLock<GraphId> = LazyLock::new(|| {

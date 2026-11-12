@@ -1,20 +1,40 @@
-//! A tile provider for tests, with sizes and read errors that a test can change.
+//! Tile providers and tile directories for tests.
 
 use crate::GraphId;
 use crate::graph_tile::GraphTileView;
 use crate::graph_tile::handles::OwnedGraphTileHandle;
 use crate::test_fixtures;
-use crate::tile_provider::{DirectoryGraphTileProvider, GraphTileProvider, GraphTileProviderError};
+use crate::tile_provider::{
+    DirectoryGraphTileProvider, GraphTileProvider, GraphTileProviderError, TILE_FILE_EXTENSION,
+};
 use core::num::NonZeroUsize;
 use geo::{CoordFloat, Point};
 use num_traits::FromPrimitive;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tempfile::TempDir;
 
 /// Returns a directory provider for `base` with a cache of one tile.
 pub(crate) fn directory_provider(base: &Path) -> DirectoryGraphTileProvider {
     DirectoryGraphTileProvider::new(base.to_path_buf(), NonZeroUsize::MIN)
+}
+
+/// Copies [`test_fixtures::smallest_andorra_tile`] into a new temporary tile directory.
+/// Returns the directory and the path of the tile file.
+pub(crate) fn copy_small_tile() -> (TempDir, PathBuf) {
+    let base = tempfile::tempdir().expect("Unable to create a temporary directory");
+    let relative_path = test_fixtures::smallest_andorra_tile()
+        .file_path(TILE_FILE_EXTENSION)
+        .expect("valid tile");
+    let tile_path = base.path().join(&relative_path);
+    std::fs::create_dir_all(tile_path.parent().expect("the tile path has a parent"))
+        .expect("Unable to create the tile directory");
+    // Miri does not support the `copy_file_range` call that `fs::copy` uses on Linux.
+    let bytes = std::fs::read(test_fixtures::andorra_tiles_dir().join(&relative_path))
+        .expect("Unable to read the tile");
+    std::fs::write(&tile_path, bytes).expect("Unable to write the tile");
+    (base, tile_path)
 }
 
 /// The Andorra tile directory, with sizes and read errors that a test can change.

@@ -186,8 +186,6 @@ fn write_entry<W: Write>(
     header.set_entry_type(EntryType::Regular);
     header.set_path(path)?;
     header.set_size(payload.len() as u64);
-    // Fixed metadata (no time, owner, or source file mode) gives the same bytes for the same tiles.
-    // Readers find tiles through index.bin and do not extract the archive, so nothing reads it.
     header.set_mode(0o644);
     header.set_uid(0);
     header.set_gid(0);
@@ -204,123 +202,20 @@ fn write_entry<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures;
-    use crate::tile_provider::parse_index_bin;
-    use crate::tile_provider::test_provider::{TestProvider, directory_provider};
-    use std::io::Read;
-    use std::path::Path;
-    use tar::Archive;
-
-    fn tile((level, tile_id): (u8, u64)) -> GraphId {
-        GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
-    }
-
-    fn read_entries(archive_bytes: &[u8]) -> Vec<(String, u64)> {
-        Archive::new(archive_bytes)
-            .entries()
-            .expect("the archive is readable")
-            .map(|entry| {
-                let entry = entry.expect("every entry is readable");
-                let path = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
-                (path, entry.raw_file_position())
-            })
-            .collect()
-    }
-
-    fn read_index_bytes(archive_bytes: &[u8]) -> Vec<u8> {
-        let mut index_bytes = Vec::new();
-        Archive::new(archive_bytes)
-            .entries()
-            .expect("the archive is readable")
-            .next()
-            .expect("the archive has entries")
-            .expect("the index entry is readable")
-            .read_to_end(&mut index_bytes)
-            .expect("the index payload is readable");
-        index_bytes
-    }
-
-    fn copy_small_tile() -> (tempfile::TempDir, std::path::PathBuf) {
-        let base = tempfile::tempdir().expect("Unable to create a temporary directory");
-        let relative_path = test_fixtures::smallest_andorra_tile()
-            .file_path(TILE_FILE_EXTENSION)
-            .expect("valid tile");
-        let tile_path = base.path().join(&relative_path);
-        std::fs::create_dir_all(tile_path.parent().expect("the tile path has a parent"))
-            .expect("Unable to create the tile directory");
-        // Miri does not support the `copy_file_range` call that `fs::copy` uses on Linux.
-        let bytes = std::fs::read(test_fixtures::andorra_tiles_dir().join(&relative_path))
-            .expect("Unable to read the tile");
-        std::fs::write(&tile_path, bytes).expect("Unable to write the tile");
-        (base, tile_path)
-    }
-
-    /// Checks an archive with the `tar` crate as an oracle,
-    /// then checks that each index entry gives the offset of its tile payload,
-    /// and that each payload equals the tile file in `tile_dir`.
-    fn check_archive(archive_bytes: &[u8], expected_tiles: &[GraphId], tile_dir: &Path) {
-        assert!(
-            archive_bytes.len().is_multiple_of(ZERO_BLOCK.len()),
-            "The archive must be a whole number of tar blocks"
-        );
-        let marker_start = archive_bytes.len() - ZERO_BLOCK.len() * 2;
-        assert!(
-            archive_bytes[marker_start..].iter().all(|byte| *byte == 0),
-            "The archive must end with two zero blocks"
-        );
-
-        let entries = read_entries(archive_bytes);
-        let mut expected_paths = vec![INDEX_BIN_FILE_NAME.to_string()];
-        // Tar entry names use `/` on every platform.
-        expected_paths.extend(expected_tiles.iter().map(|graph_id| {
-            let file_path = graph_id.file_path(TILE_FILE_EXTENSION).expect("valid tile");
-            let components: Vec<&str> = file_path
-                .iter()
-                .map(|component| component.to_str().expect("tile paths are ASCII"))
-                .collect();
-            components.join("/")
-        }));
-        let entry_paths: Vec<&String> = entries.iter().map(|(path, _)| path).collect();
-        assert_eq!(
-            entry_paths,
-            expected_paths.iter().collect::<Vec<_>>(),
-            "The archive must contain index.bin, then the tiles in archive order"
-        );
-
-        let index_bytes = read_index_bytes(archive_bytes);
-        let index_entries = parse_index_bin(&index_bytes).expect("the index parses");
-        assert_eq!(
-            index_entries.len(),
-            expected_tiles.len(),
-            "The index must have one entry for each tile"
-        );
-        for (index_entry, (path, payload_offset)) in index_entries.iter().zip(&entries[1..]) {
-            assert_eq!(
-                index_entry.offset(),
-                *payload_offset,
-                "The index offset of {path} must be where the tar reader finds its payload"
-            );
-
-            let start = usize::try_from(index_entry.offset()).expect("the offset fits in memory");
-            let payload = &archive_bytes[start..start + index_entry.size() as usize];
-            let tile_file = std::fs::read(tile_dir.join(path)).expect("the tile file is readable");
-            assert!(
-                payload == tile_file.as_slice(),
-                "The payload of {path} must be the bytes of its tile file"
-            );
-        }
-    }
+    use crate::extract::test_archive::check_archive;
+    use crate::test_fixtures::{self, base_tile};
+    use crate::tile_provider::test_provider::{TestProvider, copy_small_tile, directory_provider};
 
     #[test]
     fn test_layout_offsets() {
         const B: u64 = TAR_BLOCK_SIZE;
 
         let manifest = [
-            (tile((0, 3015)), 512),
-            (tile((1, 47_700)), 511),
-            (tile((1, 47_701)), 513),
-            (tile((2, 762_484)), 1024),
-            (tile((2, 762_485)), 100),
+            (base_tile((0, 3015)), 512),
+            (base_tile((1, 47_700)), 511),
+            (base_tile((1, 47_701)), 513),
+            (base_tile((2, 762_484)), 1024),
+            (base_tile((2, 762_485)), 100),
         ];
         let layout = ExtractLayout::from_manifest(&manifest).expect("the manifest is well-formed");
 
@@ -379,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_write_rejects_missing_tiles() {
-        let missing = tile((2, 0));
+        let missing = base_tile((2, 0));
         let mut dest = Vec::new();
         assert!(
             matches!(
@@ -551,7 +446,7 @@ mod tests {
         ];
 
         fn andorra_tiles() -> Vec<GraphId> {
-            ANDORRA_TILES.into_iter().map(tile).collect()
+            ANDORRA_TILES.into_iter().map(base_tile).collect()
         }
 
         #[test]
@@ -603,12 +498,12 @@ mod tests {
                     .expect("Unable to init the source tile provider");
 
             let tile_ids = [
-                tile((2, 763_926)),
-                tile((0, 3015)),
+                base_tile((2, 763_926)),
+                base_tile((0, 3015)),
                 GraphId::try_from_components(1, 47_701, 42).expect("valid graph ID in test"),
-                tile((2, 762_485)),
+                base_tile((2, 762_485)),
             ];
-            let excluded = tile((2, 763_925));
+            let excluded = base_tile((2, 763_925));
             assert!(
                 source_provider.tile_size(excluded).is_ok(),
                 "The excluded tile must be in the source"
@@ -692,7 +587,7 @@ mod tests {
                 let tile_ids: Vec<GraphId> = tile_ids
                     .into_iter()
                     .map(|(tile_key, feature_index)| {
-                        tile(tile_key)
+                        base_tile(tile_key)
                             .with_feature_index(feature_index)
                             .expect("valid feature index")
                     })
