@@ -16,6 +16,8 @@ use thiserror::Error;
 mod directory;
 mod iterators;
 mod tarball;
+#[cfg(test)]
+pub(crate) mod test_provider;
 mod traffic;
 
 use crate::graph_id::InvalidGraphIdError;
@@ -27,6 +29,10 @@ use crate::graph_tile::{
 pub use directory::DirectoryGraphTileProvider;
 pub use iterators::GraphSearchResult;
 use iterators::ResultsWithinRadius;
+pub(crate) use tarball::{INDEX_BIN_FILE_NAME, INDEX_ENTRY_SIZE, TAR_BLOCK_SIZE};
+
+/// The extension of graph tile files, in tile directories and in extract tarballs.
+pub(crate) const TILE_FILE_EXTENSION: &str = "gph";
 pub use tarball::{
     InvalidIndexBinError, TarballTileProvider, TileIndexBinEntry, parse_index_bin,
     serialize_index_bin,
