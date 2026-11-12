@@ -18,14 +18,14 @@ const ZERO_BLOCK: [u8; TAR_BLOCK_SIZE as usize] = [0; TAR_BLOCK_SIZE as usize];
 
 const END_OF_ARCHIVE_MARKER_LEN: u64 = 2 * TAR_BLOCK_SIZE;
 
-/// An error while writing a tile extract.
+/// An error from a tile extract operation.
 #[derive(Debug, Error)]
-pub enum ExtractWriteError {
+pub enum ExtractError {
     /// The tile list is empty.
     #[error("the extract contains no tiles")]
     NoTiles,
-    /// A requested tile is not in the provider.
-    #[error("tile {0} is not in the provider")]
+    /// The provider does not have a requested tile.
+    #[error("the provider does not have tile {0}")]
     MissingTile(GraphId),
     /// A requested graph ID has no tar entry path.
     #[error("invalid graph ID: {0}")]
@@ -58,7 +58,7 @@ pub enum ExtractWriteError {
     Io(#[from] std::io::Error),
 }
 
-impl ExtractWriteError {
+impl ExtractError {
     fn from_provider(graph_id: GraphId, source: GraphTileProviderError) -> Self {
         match source {
             GraphTileProviderError::TileDoesNotExist => Self::MissingTile(graph_id),
@@ -67,14 +67,13 @@ impl ExtractWriteError {
     }
 }
 
-/// Writes the tiles containing `tile_ids` from `provider` to `dest` as a deterministic tar extract.
+/// Writes the tiles that contain `tile_ids` from `provider` to `dest` as an extract tarball.
 /// Returns the number of bytes written.
 ///
-/// Ignores duplicate tile IDs and feature indexes.
-/// Writes `index.bin` first, then tiles in ascending (level, tile ID) order with `/` path separators.
-///
-/// For a [`DirectoryGraphTileProvider`](crate::tile_provider::DirectoryGraphTileProvider),
-/// tile files must remain unchanged during the write, and cached tiles must match the files.
+/// The archive has `index.bin` first, then the tiles in ascending (level, tile ID) order,
+/// with `/` path separators.
+/// The function ignores duplicate tile IDs and feature indexes.
+/// The output is deterministic: the same tiles always give the same bytes.
 ///
 /// # Performance
 ///
@@ -83,21 +82,12 @@ impl ExtractWriteError {
 ///
 /// # Errors
 ///
-/// Returns [`ExtractWriteError::NoTiles`] if `tile_ids` is empty,
-/// [`ExtractWriteError::MissingTile`] if a tile is absent,
-/// or [`ExtractWriteError::Provider`] if the provider cannot get a tile's size or contents.
-/// Returns [`ExtractWriteError::InvalidIndexBin`] for an invalid index entry,
-/// or [`ExtractWriteError::InvalidGraphId`] for an invalid tile path.
-/// Returns [`ExtractWriteError::SizeMismatch`] if a tile's length differs from its reported size,
-/// or [`ExtractWriteError::Io`] if a destination write or flush fails.
+/// Returns an error if `tile_ids` is empty, if the provider cannot give a valid tile,
+/// or if a write to `dest` fails.
 ///
-/// Empty input and tile size errors leave `dest` unchanged.
+/// An empty `tile_ids` or a failure to get a tile size leaves `dest` unchanged.
 /// Other errors can leave a partial archive in `dest`.
-pub fn write_extract<P, I, W>(
-    provider: &P,
-    tile_ids: I,
-    mut dest: W,
-) -> Result<u64, ExtractWriteError>
+pub fn write_extract<P, I, W>(provider: &P, tile_ids: I, mut dest: W) -> Result<u64, ExtractError>
 where
     P: GraphTileProvider,
     I: IntoIterator<Item = GraphId>,
@@ -107,11 +97,11 @@ where
         .into_iter()
         .map(|graph_id| graph_id.tile_base_id())
         .collect();
-    // Archive order requires ascending levels. `GraphId::Ord` uses descending levels.
+    // Possibility for the future: hilbert ordering or something to try optimizing for spatial clustering???
     tiles.sort_unstable_by_key(|graph_id| (graph_id.level(), graph_id.tile_id()));
     tiles.dedup();
     if tiles.is_empty() {
-        return Err(ExtractWriteError::NoTiles);
+        return Err(ExtractError::NoTiles);
     }
 
     let manifest = tiles
@@ -120,7 +110,7 @@ where
             provider
                 .tile_size(graph_id)
                 .map(|size| (graph_id, size))
-                .map_err(|source| ExtractWriteError::from_provider(graph_id, source))
+                .map_err(|source| ExtractError::from_provider(graph_id, source))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let layout = ExtractLayout::from_manifest(&manifest)?;
@@ -132,11 +122,11 @@ where
         let path = graph_id.file_path(TILE_FILE_EXTENSION)?;
         let tile = provider
             .get_handle_for_tile_containing(graph_id)
-            .map_err(|source| ExtractWriteError::from_provider(graph_id, source))?;
+            .map_err(|source| ExtractError::from_provider(graph_id, source))?;
 
         let tile_bytes = tile.tile_bytes();
         if tile_bytes.len() != expected as usize {
-            return Err(ExtractWriteError::SizeMismatch {
+            return Err(ExtractError::SizeMismatch {
                 graph_id,
                 expected,
                 actual: tile_bytes.len(),
@@ -145,6 +135,7 @@ where
         write_entry(&mut dest, &path, tile_bytes)?;
     }
 
+    // Write the end-of-archive marker and flush
     dest.write_all(&ZERO_BLOCK)?;
     dest.write_all(&ZERO_BLOCK)?;
     dest.flush()?;
@@ -162,7 +153,6 @@ struct ExtractLayout {
 
 impl ExtractLayout {
     /// Computes the layout from `manifest` pairs of (base tile ID, size in bytes), in archive order.
-    /// Rejects IDs with feature indexes or reserved bits.
     fn from_manifest(manifest: &[(GraphId, u32)]) -> Result<Self, InvalidIndexBinError> {
         let index_len = (INDEX_ENTRY_SIZE * manifest.len()) as u64;
         let mut next_entry_offset = entry_len(index_len);
@@ -192,7 +182,8 @@ fn write_entry<W: Write>(
     path: impl AsRef<Path>,
     payload: &[u8],
 ) -> std::io::Result<()> {
-    // Fixed metadata makes the archive reproducible.
+    // Fixed metadata (no time, owner, or source file mode) gives the same bytes for the same tiles.
+    // Readers find tiles through index.bin and do not extract the archive, so nothing reads it.
     let mut header = Header::new_ustar();
     header.set_entry_type(EntryType::Regular);
     header.set_path(path)?;
@@ -253,10 +244,6 @@ mod tests {
         }
     }
 
-    fn test_failure() -> GraphTileProviderError {
-        GraphTileProviderError::TileFetchError("a failure from the test provider".to_string())
-    }
-
     impl GraphTileProvider for TestProvider {
         type TileHandle = Arc<OwnedGraphTileHandle>;
 
@@ -276,7 +263,7 @@ mod tests {
             graph_id: GraphId,
         ) -> Result<Self::TileHandle, GraphTileProviderError> {
             if self.read_failures.contains(&graph_id.tile_base_id()) {
-                return Err(test_failure());
+                return Err(GraphTileProviderError::TileFetchError(String::new()));
             }
             self.inner.get_handle_for_tile_containing(graph_id)
         }
@@ -284,7 +271,7 @@ mod tests {
         fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
             let base_graph_id = graph_id.tile_base_id();
             if self.size_failures.contains(&base_graph_id) {
-                return Err(test_failure());
+                return Err(GraphTileProviderError::TileFetchError(String::new()));
             }
             if let Some(size) = self.reported_sizes.get(&base_graph_id) {
                 return Ok(*size);
@@ -326,6 +313,24 @@ mod tests {
         index_bytes
     }
 
+    fn copy_small_tile() -> (tempfile::TempDir, std::path::PathBuf) {
+        let base = tempfile::tempdir().expect("Unable to create a temporary directory");
+        let relative_path = test_fixtures::smallest_andorra_tile()
+            .file_path(TILE_FILE_EXTENSION)
+            .expect("valid tile");
+        let tile_path = base.path().join(&relative_path);
+        std::fs::create_dir_all(tile_path.parent().expect("the tile path has a parent"))
+            .expect("Unable to create the tile directory");
+        // Miri does not support the `copy_file_range` call that `fs::copy` uses on Linux.
+        let bytes = std::fs::read(test_fixtures::andorra_tiles_dir().join(&relative_path))
+            .expect("Unable to read the tile");
+        std::fs::write(&tile_path, bytes).expect("Unable to write the tile");
+        (base, tile_path)
+    }
+
+    /// Checks an archive with the `tar` crate as an oracle,
+    /// then checks that each index entry gives the offset of its tile payload,
+    /// and that each payload equals the tile file in `tile_dir`.
     fn check_archive(archive_bytes: &[u8], expected_tiles: &[GraphId], tile_dir: &Path) {
         assert!(
             archive_bytes.len().is_multiple_of(ZERO_BLOCK.len()),
@@ -435,7 +440,7 @@ mod tests {
         assert!(
             matches!(
                 write_extract(&TestProvider::new(), [], &mut dest),
-                Err(ExtractWriteError::NoTiles)
+                Err(ExtractError::NoTiles)
             ),
             "An extract must contain at least one tile"
         );
@@ -452,7 +457,7 @@ mod tests {
         assert!(
             matches!(
                 write_extract(&TestProvider::new(), [test_fixtures::smallest_andorra_tile(), missing], &mut dest),
-                Err(ExtractWriteError::MissingTile(graph_id)) if graph_id == missing
+                Err(ExtractError::MissingTile(graph_id)) if graph_id == missing
             ),
             "A tile that is not in the provider must be a MissingTile error"
         );
@@ -470,7 +475,7 @@ mod tests {
         assert!(
             matches!(
                 write_extract(&provider, [test_fixtures::smallest_andorra_tile()], &mut dest),
-                Err(ExtractWriteError::Provider {
+                Err(ExtractError::Provider {
                     graph_id,
                     source: GraphTileProviderError::TileFetchError(_),
                 }) if graph_id == test_fixtures::smallest_andorra_tile()
@@ -493,7 +498,7 @@ mod tests {
         assert!(
             matches!(
                 write_extract(&provider, [test_fixtures::smallest_andorra_tile()], Vec::new()),
-                Err(ExtractWriteError::Provider {
+                Err(ExtractError::Provider {
                     graph_id,
                     source: GraphTileProviderError::TileFetchError(_),
                 }) if graph_id == test_fixtures::smallest_andorra_tile()
@@ -515,7 +520,7 @@ mod tests {
         assert!(
             matches!(
                 write_extract(&provider, [test_fixtures::smallest_andorra_tile()], Vec::new()),
-                Err(ExtractWriteError::SizeMismatch {
+                Err(ExtractError::SizeMismatch {
                     graph_id,
                     expected,
                     actual,
@@ -525,21 +530,6 @@ mod tests {
             ),
             "Tile bytes of a different length than the reported size must be an error"
         );
-    }
-
-    fn copy_small_tile() -> (tempfile::TempDir, std::path::PathBuf) {
-        let base = tempfile::tempdir().expect("Unable to create a temporary directory");
-        let relative_path = test_fixtures::smallest_andorra_tile()
-            .file_path(TILE_FILE_EXTENSION)
-            .expect("valid tile");
-        let tile_path = base.path().join(&relative_path);
-        std::fs::create_dir_all(tile_path.parent().expect("the tile path has a parent"))
-            .expect("Unable to create the tile directory");
-        // Miri does not support the `copy_file_range` call that `fs::copy` uses on Linux.
-        let bytes = std::fs::read(test_fixtures::andorra_tiles_dir().join(&relative_path))
-            .expect("Unable to read the tile");
-        std::fs::write(&tile_path, bytes).expect("Unable to write the tile");
-        (base, tile_path)
     }
 
     #[test]
@@ -560,7 +550,7 @@ mod tests {
         assert!(
             matches!(
                 write_extract(&provider, [test_fixtures::smallest_andorra_tile()], Vec::new()),
-                Err(ExtractWriteError::SizeMismatch {
+                Err(ExtractError::SizeMismatch {
                     expected,
                     actual,
                     ..
@@ -578,7 +568,7 @@ mod tests {
         assert!(
             matches!(
                 write_extract(&directory_provider(base.path()), [test_fixtures::smallest_andorra_tile()], Vec::new()),
-                Err(ExtractWriteError::Provider {
+                Err(ExtractError::Provider {
                     graph_id,
                     source: GraphTileProviderError::DecodingError(_),
                 }) if graph_id == test_fixtures::smallest_andorra_tile()
@@ -615,10 +605,12 @@ mod tests {
     mod all_andorra_tiles {
         use super::*;
         use crate::tile_provider::TarballTileProvider;
+        use core::fmt::Write as _;
         use proptest::collection::vec;
         use proptest::prelude::ProptestConfig;
         use proptest::sample::select;
         use proptest::{prop_assert, prop_assert_eq, proptest};
+        use sha2::{Digest, Sha256};
 
         /// The tiles of the Andorra fixtures, in archive order.
         const ANDORRA_TILES: [(u8, u64); 7] = [
@@ -657,8 +649,9 @@ mod tests {
         #[test]
         fn test_order_and_duplicates_do_not_change_output() {
             let provider = TestProvider::new();
-            let mut in_order = Vec::new();
-            write_extract(&provider, andorra_tiles(), &mut in_order).expect("first write succeeds");
+            let mut original_tile_order_bytes = Vec::new();
+            write_extract(&provider, andorra_tiles(), &mut original_tile_order_bytes)
+                .expect("first write succeeds");
 
             let scrambled = andorra_tiles().into_iter().rev().flat_map(|graph_id| {
                 let with_feature_index = graph_id
@@ -666,13 +659,13 @@ mod tests {
                     .expect("valid feature index");
                 [graph_id, with_feature_index]
             });
-            let mut from_scrambled = Vec::new();
-            write_extract(&provider, scrambled, &mut from_scrambled)
+            let mut scrambled_tile_order_bytes = Vec::new();
+            write_extract(&provider, scrambled, &mut scrambled_tile_order_bytes)
                 .expect("second write succeeds");
 
             assert!(
-                in_order == from_scrambled,
-                "The order of the tile IDs, duplicates, and feature indexes must not change the output"
+                original_tile_order_bytes == scrambled_tile_order_bytes,
+                "Reordering or duplicating tile IDs should not change the output"
             );
         }
 
@@ -728,20 +721,36 @@ mod tests {
         }
 
         #[test]
+        fn test_all_andorra_tiles_sha256() {
+            let mut archive_bytes = Vec::new();
+            write_extract(&TestProvider::new(), andorra_tiles(), &mut archive_bytes)
+                .expect("the extract writes cleanly");
+
+            let digest =
+                Sha256::digest(&archive_bytes)
+                    .iter()
+                    .fold(String::new(), |mut hex, byte| {
+                        write!(hex, "{byte:02x}").expect("a write to a String does not fail");
+                        hex
+                    });
+            insta::assert_snapshot!(digest);
+        }
+
+        #[test]
         fn test_directory_and_tarball_providers_write_the_same_extract() {
             // The two fixtures contain the same tiles.
             let tarball = TarballTileProvider::new_readonly(test_fixtures::andorra_tiles_tar())
                 .expect("Unable to init the tarball tile provider");
             let directory = directory_provider(&test_fixtures::andorra_tiles_dir());
 
-            let mut from_tarball = Vec::new();
-            write_extract(&tarball, andorra_tiles(), &mut from_tarball)
+            let mut from_tarball_bytes = Vec::new();
+            write_extract(&tarball, andorra_tiles(), &mut from_tarball_bytes)
                 .expect("the extract writes cleanly from the tarball");
-            let mut from_directory = Vec::new();
-            write_extract(&directory, andorra_tiles(), &mut from_directory)
+            let mut from_directory_bytes = Vec::new();
+            write_extract(&directory, andorra_tiles(), &mut from_directory_bytes)
                 .expect("the extract writes cleanly from the directory");
             assert!(
-                from_tarball == from_directory,
+                from_tarball_bytes == from_directory_bytes,
                 "The tarball and the directory of the same tiles must give the same extract"
             );
         }

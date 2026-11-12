@@ -463,11 +463,10 @@ pub struct TileIndexBinEntry {
 pub(crate) const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
 
 /// The block size of a tar archive.
-///
-/// Each entry is a header block, then its data, padded with zeros to whole blocks.
+/// The data of each tar entry starts on a block boundary.
 pub(crate) const TAR_BLOCK_SIZE: u64 = 512;
 
-/// The file name of the tile index, which is the first entry of an extract tarball.
+/// The file name of the tile index.
 pub(crate) const INDEX_BIN_FILE_NAME: &str = "index.bin";
 
 /// The reasons why an `index.bin` file or one of its entries is not valid.
