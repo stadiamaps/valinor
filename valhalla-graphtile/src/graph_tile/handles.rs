@@ -323,6 +323,8 @@ impl GraphTileHandle for MmapGraphTileHandle {
         // SAFETY: The decoded view borrows this same range of the memory map.
         // The caller of `MmapGraphTileHandle::try_from` already accepted
         // the conditions of `MmapTilePointer::as_tile_bytes` for the life of the handle.
+        // NB: We may need to introduce an alternate pattern if we deal with live traffic tiles,
+        // but this is fine for all current uses.
         unsafe { self.borrow_owner().as_tile_bytes() }
     }
 }
