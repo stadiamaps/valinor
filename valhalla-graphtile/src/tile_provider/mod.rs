@@ -16,6 +16,8 @@ use thiserror::Error;
 mod directory;
 mod iterators;
 mod tarball;
+#[cfg(test)]
+pub(crate) mod test_provider;
 mod traffic;
 
 use crate::graph_id::InvalidGraphIdError;

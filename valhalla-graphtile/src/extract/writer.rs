@@ -182,12 +182,12 @@ fn write_entry<W: Write>(
     path: impl AsRef<Path>,
     payload: &[u8],
 ) -> std::io::Result<()> {
-    // Fixed metadata (no time, owner, or source file mode) gives the same bytes for the same tiles.
-    // Readers find tiles through index.bin and do not extract the archive, so nothing reads it.
     let mut header = Header::new_ustar();
     header.set_entry_type(EntryType::Regular);
     header.set_path(path)?;
     header.set_size(payload.len() as u64);
+    // Fixed metadata (no time, owner, or source file mode) gives the same bytes for the same tiles.
+    // Readers find tiles through index.bin and do not extract the archive, so nothing reads it.
     header.set_mode(0o644);
     header.set_uid(0);
     header.set_gid(0);
@@ -204,88 +204,15 @@ fn write_entry<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph_tile::GraphTileView;
-    use crate::graph_tile::handles::OwnedGraphTileHandle;
     use crate::test_fixtures;
-    use crate::tile_provider::{DirectoryGraphTileProvider, parse_index_bin};
-    use geo::{CoordFloat, Point};
-    use num_traits::FromPrimitive;
-    use std::collections::{HashMap, HashSet};
+    use crate::tile_provider::parse_index_bin;
+    use crate::tile_provider::test_provider::{TestProvider, directory_provider};
     use std::io::Read;
-    use std::num::NonZeroUsize;
     use std::path::Path;
-    use std::sync::Arc;
     use tar::Archive;
 
     fn tile((level, tile_id): (u8, u64)) -> GraphId {
         GraphId::try_from_components(level, tile_id, 0).expect("valid tile ID in test")
-    }
-
-    fn directory_provider(base: &Path) -> DirectoryGraphTileProvider {
-        DirectoryGraphTileProvider::new(base.to_path_buf(), NonZeroUsize::MIN)
-    }
-
-    /// The Andorra tile directory, with sizes and read errors that a test can change.
-    struct TestProvider {
-        inner: DirectoryGraphTileProvider,
-        reported_sizes: HashMap<GraphId, u32>,
-        size_failures: HashSet<GraphId>,
-        read_failures: HashSet<GraphId>,
-    }
-
-    impl TestProvider {
-        fn new() -> Self {
-            Self {
-                inner: directory_provider(&test_fixtures::andorra_tiles_dir()),
-                reported_sizes: HashMap::new(),
-                size_failures: HashSet::new(),
-                read_failures: HashSet::new(),
-            }
-        }
-    }
-
-    impl GraphTileProvider for TestProvider {
-        type TileHandle = Arc<OwnedGraphTileHandle>;
-
-        fn with_tile_containing<F, T>(
-            &self,
-            graph_id: GraphId,
-            process: F,
-        ) -> Result<T, GraphTileProviderError>
-        where
-            F: FnOnce(&GraphTileView) -> T,
-        {
-            self.inner.with_tile_containing(graph_id, process)
-        }
-
-        fn get_handle_for_tile_containing(
-            &self,
-            graph_id: GraphId,
-        ) -> Result<Self::TileHandle, GraphTileProviderError> {
-            if self.read_failures.contains(&graph_id.tile_base_id()) {
-                return Err(GraphTileProviderError::TileFetchError(String::new()));
-            }
-            self.inner.get_handle_for_tile_containing(graph_id)
-        }
-
-        fn tile_size(&self, graph_id: GraphId) -> Result<u32, GraphTileProviderError> {
-            let base_graph_id = graph_id.tile_base_id();
-            if self.size_failures.contains(&base_graph_id) {
-                return Err(GraphTileProviderError::TileFetchError(String::new()));
-            }
-            if let Some(size) = self.reported_sizes.get(&base_graph_id) {
-                return Ok(*size);
-            }
-            self.inner.tile_size(graph_id)
-        }
-
-        fn tiles_within_radius<N: CoordFloat + FromPrimitive>(
-            &self,
-            center: Point<N>,
-            radius: N,
-        ) -> Vec<GraphId> {
-            self.inner.tiles_within_radius(center, radius)
-        }
     }
 
     fn read_entries(archive_bytes: &[u8]) -> Vec<(String, u64)> {
