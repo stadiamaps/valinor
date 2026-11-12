@@ -227,7 +227,7 @@ mod test {
     use crate::graph_tile::handles::GraphTileHandle;
     use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
-    use crate::tile_provider::{GraphTileProvider, GraphTileProviderError};
+    use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, TILE_FILE_EXTENSION};
     use core::num::NonZeroUsize;
     use rand::{
         distr::{Distribution, Uniform},
