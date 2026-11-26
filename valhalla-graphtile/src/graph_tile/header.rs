@@ -1,3 +1,5 @@
+use super::predicted_speeds::COEFFICIENT_COUNT;
+use super::{GraphTileBuildError, GraphTileDecodingError};
 use crate::{AsCowStr, BIN_COUNT, GraphId};
 use bitfield_struct::bitfield;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Utc};
@@ -10,9 +12,9 @@ mod builder;
 
 pub(super) use builder::GraphTileHeaderBuilder;
 
-/// Remaining variable offset slots for growth.
-/// See valhalla/balder/graphtileheader.h for details.
-const EMPTY_SLOTS: usize = 11;
+/// Expansion slots for future variable-length section offsets.
+/// See valhalla/baldr/graphtileheader.h for details.
+const EMPTY_SLOTS: usize = 10;
 
 /// The number of UTF-8 bytes in the fixed size version field.
 pub(crate) const VERSION_LEN: usize = 16;
@@ -209,8 +211,91 @@ pub struct GraphTileHeader {
     predicted_speeds_offset: U32<LE>,
     /// The size of the tile (in bytes)
     pub tile_size: U32<LE>,
+    bounding_circle_offset: U32<LE>,
+    /// Empty expansion slots.
+    ///
     /// See valhalla/balder/graphtileheader.h for details.
-    _empty_slots: [U32<LE>; EMPTY_SLOTS],
+    expansion_offsets: [U32<LE>; EMPTY_SLOTS],
+}
+
+const _: () = assert!(
+    size_of::<GraphTileHeader>() == 272,
+    "Valhalla header differs from the expected size. Are you sure you know what you're doing?"
+);
+
+/// Byte lengths derived from the ordered section boundaries in a tile header.
+///
+/// The only constructor is failable, and guarantees validity by construction.
+pub(super) struct VariableSectionSizes {
+    forward_restrictions: usize,
+    reverse_restrictions: usize,
+    edge_info: usize,
+    text_list: usize,
+    lane_connectivity: usize,
+}
+
+impl VariableSectionSizes {
+    pub(super) const fn forward_restrictions(&self) -> usize {
+        self.forward_restrictions
+    }
+
+    pub(super) const fn reverse_restrictions(&self) -> usize {
+        self.reverse_restrictions
+    }
+
+    pub(super) const fn edge_info(&self) -> usize {
+        self.edge_info
+    }
+
+    pub(super) const fn text_list(&self) -> usize {
+        self.text_list
+    }
+
+    pub(super) const fn lane_connectivity(&self) -> usize {
+        self.lane_connectivity
+    }
+}
+
+impl TryFrom<&GraphTileHeader> for VariableSectionSizes {
+    type Error = GraphTileDecodingError;
+
+    fn try_from(header: &GraphTileHeader) -> Result<Self, Self::Error> {
+        let section_size = |name: &str, start: u32, end: u32| {
+            end.checked_sub(start)
+                .map(|size| size as usize)
+                .ok_or_else(|| GraphTileDecodingError::CastError {
+                    field: "section_offsets".to_string(),
+                    error_description: format!(
+                        "{name} start at byte {start} but end at byte {end}"
+                    ),
+                })
+        };
+
+        let forward = header.complex_restriction_forward_offset.get();
+        let reverse = header.complex_restriction_reverse_offset.get();
+        let edge_info = header.edge_info_offset.get();
+        let text_list = header.text_list_offset.get();
+        let lane_connectivity = header.lane_connectivity_offset.get();
+        let lane_connectivity_end = header.lane_connectivity_end();
+        // The counted speed records must start within the declared tile.
+        section_size(
+            "predicted speeds",
+            lane_connectivity_end,
+            header.tile_size.get(),
+        )?;
+
+        Ok(Self {
+            forward_restrictions: section_size("forward restrictions", forward, reverse)?,
+            reverse_restrictions: section_size("reverse restrictions", reverse, edge_info)?,
+            edge_info: section_size("edge info records", edge_info, text_list)?,
+            text_list: section_size("text records", text_list, lane_connectivity)?,
+            lane_connectivity: section_size(
+                "lane connectivity records",
+                lane_connectivity,
+                lane_connectivity_end,
+            )?,
+        })
+    }
 }
 
 impl GraphTileHeader {
@@ -348,6 +433,76 @@ impl GraphTileHeader {
         self.bin_offsets[BIN_COUNT - 1].get() as usize
     }
 
+    pub(super) fn with_expansion_offsets_from(
+        mut self,
+        source: &Self,
+        opaque_suffix_size: usize,
+    ) -> Result<Self, GraphTileBuildError> {
+        if opaque_suffix_size != 0 && self.tile_size != source.tile_size {
+            // Opaque data may contain absolute references into the original tile.
+            return Err(GraphTileBuildError::WouldShiftOpaqueData {
+                offset: source.tile_size.get() as usize - opaque_suffix_size,
+            });
+        }
+        // Rewrites keep the existing sections in place.
+        // Only the older sentinel moves when the tile grows,
+        // because older writers used the tile end for absent sections.
+        self.bounding_circle_offset = source.bounding_circle_offset;
+        self.expansion_offsets = source.expansion_offsets;
+        for offset in
+            core::iter::once(&mut self.bounding_circle_offset).chain(&mut self.expansion_offsets)
+        {
+            if *offset == source.tile_size {
+                *offset = self.tile_size;
+            }
+        }
+        Ok(self)
+    }
+
+    /// Splits the remaining tile bytes after the edge bins at the forward restrictions offset.
+    pub(super) fn split_bin_extensions<'a>(
+        &self,
+        bytes: &'a [u8],
+        edge_bins_end: usize,
+    ) -> Result<(&'a [u8], &'a [u8]), GraphTileDecodingError> {
+        let forward = self.complex_restriction_forward_offset.get() as usize;
+        let Some(size) = forward.checked_sub(edge_bins_end) else {
+            return Err(GraphTileDecodingError::CastError {
+                field: "edge_bin_extensions".to_string(),
+                error_description: format!(
+                    "forward restrictions start at byte {forward} before the edge bins end at byte {edge_bins_end}"
+                ),
+            });
+        };
+
+        let (extensions, remaining) = bytes.split_at_checked(size).ok_or_else(|| {
+            GraphTileDecodingError::CastError {
+                field: "edge_bin_extensions".to_string(),
+                error_description: format!(
+                    "the extension section requires {size} bytes, but only {} remain after the edge bins",
+                    bytes.len()
+                ),
+            }
+        })?;
+
+        let circles = self.bounding_circle_offset.get();
+        if circles != 0 && circles != self.tile_size.get() {
+            let circle_size = self.edge_bins_count() * size_of::<U32<LE>>();
+            let circle_tail = (circles as usize)
+                .checked_sub(edge_bins_end)
+                .and_then(|start| extensions.get(start..));
+            if circle_tail.is_none_or(|tail| tail.len() < circle_size) {
+                return Err(GraphTileDecodingError::CastError {
+                    field: "bounding_circles".to_string(),
+                    error_description: format!(
+                        "section at byte {circles} does not fit between the edge bins and forward restrictions"
+                    ),
+                });
+            }
+        }
+        Ok((extensions, remaining))
+    }
+
     /// Gets the start and end offset for the given bin index.
     /// This offset can be used to index into the array of edge IDs in the `GraphTile` struct.
     ///
@@ -397,11 +552,38 @@ impl GraphTileHeader {
     /// The size (in bytes) occupied by the lane connectivity data.
     #[inline]
     pub const fn lane_connectivity_size(&self) -> usize {
+        (self.lane_connectivity_end() - self.lane_connectivity_offset.get()) as usize
+    }
+
+    const fn lane_connectivity_end(&self) -> u32 {
         if self.predicted_speeds_count() > 0 {
-            (self.predicted_speeds_offset.get() - self.lane_connectivity_offset.get()) as usize
+            self.predicted_speeds_offset.get()
         } else {
-            (self.tile_size.get() - self.lane_connectivity_offset.get()) as usize
+            self.tile_size.get()
         }
+    }
+
+    /// The bytes between the end of the counted speed records and the declared tile end.
+    pub(super) fn opaque_suffix_size(&self) -> Result<usize, GraphTileDecodingError> {
+        let profile_count = self.predicted_speeds_count() as usize;
+        if profile_count == 0 {
+            return Ok(0);
+        }
+
+        let offsets_size = self.directed_edge_count() as usize * size_of::<u32>();
+        let profiles_size = profile_count * size_of::<[i16; COEFFICIENT_COUNT]>();
+        let predicted_size = offsets_size + profiles_size;
+        let predicted_start = self.predicted_speeds_offset.get() as usize;
+        let tile_end = self.tile_size.get() as usize;
+        if predicted_start > tile_end || predicted_size > tile_end - predicted_start {
+            return Err(GraphTileDecodingError::CastError {
+                field: "predicted_speeds".to_string(),
+                error_description: format!(
+                    "the {predicted_size}-byte speed block at byte {predicted_start} exceeds the declared tile end at byte {tile_end}"
+                ),
+            });
+        }
+        Ok(tile_end - predicted_start - predicted_size)
     }
 }
 

@@ -57,6 +57,8 @@ pub(crate) struct GraphTileHeaderBuilder {
     pub create_date: DateTime<Utc>,
     // FIXME: This deserves a better interface
     pub bin_offsets: [u32; BIN_COUNT],
+    /// Raw memory size in bytes between the edge bins and forward restrictions.
+    pub bin_extensions_size: usize,
     /// Raw memory size in bytes
     pub complex_forward_restrictions_size: usize,
     /// Raw memory size in bytes
@@ -67,6 +69,8 @@ pub(crate) struct GraphTileHeaderBuilder {
     pub text_list_size: usize,
     /// Raw memory size in bytes
     pub lane_connectivity_size: usize,
+    /// Raw memory size in bytes following the predicted speed profiles.
+    pub opaque_suffix_size: usize,
 }
 
 impl GraphTileHeaderBuilder {
@@ -189,7 +193,8 @@ impl GraphTileHeaderBuilder {
             + (self.admin_count * size_of::<Admin>())
             // Cross reference with edge_bins_size in header.rs...
             // The interface for this will improve at some point.
-            + (usize::try_from(self.bin_offsets[BIN_COUNT - 1])? * size_of::<GraphId>());
+            + (usize::try_from(self.bin_offsets[BIN_COUNT - 1])? * size_of::<GraphId>())
+            + self.bin_extensions_size;
         let complex_reverse_restrictions_offset =
             dst_base_offset + self.complex_forward_restrictions_size;
         let edge_info_offset =
@@ -231,8 +236,9 @@ impl GraphTileHeaderBuilder {
             bin_offsets: self.bin_offsets.map(Into::into),
             lane_connectivity_offset: u32::try_from(lane_connectivity_offset)?.into(),
             predicted_speeds_offset: u32::try_from(predicted_speed_offset)?.into(),
-            tile_size: u32::try_from(tile_size)?.into(),
-            _empty_slots: [0.into(); _],
+            tile_size: u32::try_from(tile_size + self.opaque_suffix_size)?.into(),
+            bounding_circle_offset: 0.into(),
+            expansion_offsets: [0.into(); _],
         })
     }
 }
