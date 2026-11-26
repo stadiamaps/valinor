@@ -4,7 +4,9 @@ use crate::graph_tile::{GraphTileBuildError, GraphTileBuilder};
 use crate::graph_tile::{GraphTileView, handles::OwnedGraphTileHandle};
 use crate::spatial::bbox_with_center;
 use crate::tile_hierarchy::STANDARD_LEVELS;
-use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, LockTable};
+use crate::tile_provider::{
+    GraphTileProvider, GraphTileProviderError, LockTable, TILE_FILE_EXTENSION,
+};
 use geo::{CoordFloat, Point};
 use lru::LruCache;
 use num_traits::FromPrimitive;
@@ -124,7 +126,9 @@ impl DirectoryGraphTileProvider {
     ///
     /// NOTE: This function assumes that the graph ID is already a base ID.
     fn path_for_graph_id(&self, graph_id: GraphId) -> Result<PathBuf, InvalidGraphIdError> {
-        Ok(self.base_directory.join(graph_id.file_path("gph")?))
+        Ok(self
+            .base_directory
+            .join(graph_id.file_path(TILE_FILE_EXTENSION)?))
     }
 }
 
@@ -223,7 +227,7 @@ mod test {
     use crate::graph_tile::handles::GraphTileHandle;
     use crate::test_fixtures;
     use crate::tile_hierarchy::STANDARD_LEVELS;
-    use crate::tile_provider::{GraphTileProvider, GraphTileProviderError};
+    use crate::tile_provider::{GraphTileProvider, GraphTileProviderError, TILE_FILE_EXTENSION};
     use core::num::NonZeroUsize;
     use rand::{
         distr::{Distribution, Uniform},
@@ -493,7 +497,7 @@ mod test {
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile_path = base.path().join(
             graph_id
-                .file_path("gph")
+                .file_path(TILE_FILE_EXTENSION)
                 .expect("Unable to get the tile path"),
         );
         std::fs::create_dir_all(tile_path).expect("Unable to create a directory at the tile path");
@@ -516,7 +520,7 @@ mod test {
         let graph_id = GraphId::try_from_components(0, 3015, 0).expect("Unable to create graph ID");
         let tile_path = base.path().join(
             graph_id
-                .file_path("gph")
+                .file_path(TILE_FILE_EXTENSION)
                 .expect("Unable to get the tile path"),
         );
         let parent = tile_path.parent().expect("The tile path has a parent");
