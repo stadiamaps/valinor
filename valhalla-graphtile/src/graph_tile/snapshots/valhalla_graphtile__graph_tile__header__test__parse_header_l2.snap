@@ -201,10 +201,10 @@ GraphTileHeader {
     tile_size: U32(
         196680,
     ),
-    _empty_slots: [
-        U32(
-            0,
-        ),
+    bounding_circle_offset: U32(
+        0,
+    ),
+    expansion_offsets: [
         U32(
             0,
         ),

@@ -89,6 +89,7 @@ pub struct GraphTileBuilder<'a> {
     turn_lanes: Cow<'a, [TurnLane]>,
     admins: Cow<'a, [Admin]>,
     edge_bins: Cow<'a, [GraphId]>,
+    bin_extensions: Cow<'a, [u8]>,
     complex_forward_restrictions_memory: Cow<'a, [u8]>,
     complex_reverse_restrictions_memory: Cow<'a, [u8]>,
     edge_info_memory: Cow<'a, [u8]>,
@@ -97,6 +98,8 @@ pub struct GraphTileBuilder<'a> {
     predicted_speed_offsets: Cow<'a, [U32<LE>]>,
     /// Raw profile memory (`n_profiles x COEFFICIENT_COUNT` entries back to back)
     predicted_speed_profile_memory: Cow<'a, [I16<LE>]>,
+    /// Extra expansion area supported by the tile spec (currently treated as opaque bytes)
+    opaque_suffix: Cow<'a, [u8]>,
     /// Lazily initialized map for deduplicating speed profiles.
     /// None = not yet initialized; Some = ready for use.
     speed_profile_dedup: Option<HashMap<[i16; COEFFICIENT_COUNT], u32>>,
@@ -144,12 +147,14 @@ impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
             turn_lanes,
             admins,
             edge_bins,
+            bin_extensions,
             complex_forward_restrictions_memory,
             complex_reverse_restrictions_memory,
             edge_info_memory,
             text_memory,
             lane_connectivity_memory,
             predicted_speeds,
+            opaque_suffix,
         } = value.borrow_dependent();
 
         let (predicted_speed_offsets, predicted_speed_profile_memory) = match predicted_speeds {
@@ -181,6 +186,7 @@ impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
             turn_lanes: Cow::Borrowed(turn_lanes),
             admins: Cow::Borrowed(admins),
             edge_bins: Cow::Borrowed(edge_bins),
+            bin_extensions: Cow::Borrowed(bin_extensions),
             complex_forward_restrictions_memory: Cow::Borrowed(complex_forward_restrictions_memory),
             complex_reverse_restrictions_memory: Cow::Borrowed(complex_reverse_restrictions_memory),
             edge_info_memory: Cow::Borrowed(edge_info_memory),
@@ -188,6 +194,7 @@ impl<'a> From<&'a OwnedGraphTileHandle> for GraphTileBuilder<'a> {
             lane_connectivity_memory: Cow::Borrowed(lane_connectivity_memory),
             predicted_speed_offsets,
             predicted_speed_profile_memory,
+            opaque_suffix: Cow::Borrowed(opaque_suffix),
             speed_profile_dedup: None,
         }
     }
@@ -393,6 +400,10 @@ impl GraphTileBuilder<'_> {
     ///
     /// TL;DR, things that you really shouldn't do, or are a clear programming error.
     ///
+    /// A predicted-speed update also fails if it would end up
+    /// shifting an opaque data section at the end of the tile
+    /// (since we can't guarantee position independence of that).
+    ///
     /// # Panics
     ///
     /// This function includes several assertions.
@@ -449,6 +460,7 @@ impl GraphTileBuilder<'_> {
             admin_count: intermediate.admins.len(),
             create_date: intermediate.create_date,
             bin_offsets: intermediate.remove_me_header.bin_offsets.map(Into::into),
+            bin_extensions_size: intermediate.bin_extensions.len(),
             complex_forward_restrictions_size: intermediate
                 .complex_forward_restrictions_memory
                 .len(),
@@ -458,9 +470,14 @@ impl GraphTileBuilder<'_> {
             edge_info_size: intermediate.edge_info_memory.len(),
             text_list_size: intermediate.text_memory.len(),
             lane_connectivity_size: intermediate.lane_connectivity_memory.len(),
+            opaque_suffix_size: intermediate.opaque_suffix.len(),
         };
+        let header = header.build()?.with_expansion_offsets_from(
+            &intermediate.remove_me_header,
+            intermediate.opaque_suffix.len(),
+        )?;
         // Meh extra alloc...
-        let header_bytes = header.build()?.as_bytes().to_vec();
+        let header_bytes = header.as_bytes().to_vec();
 
         Ok(TileByteIter {
             header: header_bytes,
@@ -479,6 +496,7 @@ impl GraphTileBuilder<'_> {
             turn_lanes: intermediate.turn_lanes,
             admins: intermediate.admins,
             edge_bins: intermediate.edge_bins,
+            bin_extensions: intermediate.bin_extensions,
             complex_forward_restrictions_memory: intermediate.complex_forward_restrictions_memory,
             complex_reverse_restrictions_memory: intermediate.complex_reverse_restrictions_memory,
             edge_info_memory: intermediate.edge_info_memory,
@@ -486,6 +504,7 @@ impl GraphTileBuilder<'_> {
             lane_connectivity_memory: intermediate.lane_connectivity_memory,
             predicted_speed_offsets: intermediate.predicted_speed_offsets,
             predicted_speed_profile_memory: intermediate.predicted_speed_profile_memory,
+            opaque_suffix: intermediate.opaque_suffix,
         })
     }
 
@@ -532,6 +551,7 @@ struct TileByteIter<'a> {
     turn_lanes: Cow<'a, [TurnLane]>,
     admins: Cow<'a, [Admin]>,
     edge_bins: Cow<'a, [GraphId]>,
+    bin_extensions: Cow<'a, [u8]>,
     complex_forward_restrictions_memory: Cow<'a, [u8]>,
     complex_reverse_restrictions_memory: Cow<'a, [u8]>,
     edge_info_memory: Cow<'a, [u8]>,
@@ -539,6 +559,7 @@ struct TileByteIter<'a> {
     lane_connectivity_memory: Cow<'a, [u8]>,
     predicted_speed_offsets: Cow<'a, [U32<LE>]>,
     predicted_speed_profile_memory: Cow<'a, [I16<LE>]>,
+    opaque_suffix: Cow<'a, [u8]>,
 }
 
 /// The stage of the tile production.
@@ -563,6 +584,7 @@ enum TileBuildStage {
     TurnLanes,
     Admins,
     EdgeBins,
+    BinExtensions,
     ComplexForwardRestrictions,
     ComplexReverseRestrictions,
     EdgeInfo,
@@ -570,6 +592,7 @@ enum TileBuildStage {
     LaneConnectivity,
     PredictedSpeedOffsets,
     PredictedSpeedProfiles,
+    OpaqueSuffix,
     Done,
 }
 
@@ -617,6 +640,9 @@ impl Iterator for TileByteIter<'_> {
             TileBuildStage::TurnLanes => bytes_from_items(std::mem::take(&mut self.turn_lanes)),
             TileBuildStage::Admins => bytes_from_items(std::mem::take(&mut self.admins)),
             TileBuildStage::EdgeBins => bytes_from_items(std::mem::take(&mut self.edge_bins)),
+            TileBuildStage::BinExtensions => {
+                bytes_from_items(std::mem::take(&mut self.bin_extensions))
+            }
             TileBuildStage::ComplexForwardRestrictions => bytes_from_items(std::mem::take(
                 &mut self.complex_forward_restrictions_memory,
             )),
@@ -635,6 +661,9 @@ impl Iterator for TileByteIter<'_> {
             }
             TileBuildStage::PredictedSpeedProfiles => {
                 bytes_from_items(std::mem::take(&mut self.predicted_speed_profile_memory))
+            }
+            TileBuildStage::OpaqueSuffix => {
+                bytes_from_items(std::mem::take(&mut self.opaque_suffix))
             }
             TileBuildStage::Done => {
                 // No more sections

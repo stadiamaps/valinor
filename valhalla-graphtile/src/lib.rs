@@ -143,6 +143,8 @@ pub enum RoadUse {
     LivingStreet = 10,
     /// A generic service road (not specifically a driveway, alley, parking aisle, etc.).
     ServiceRoad = 11,
+    /// A road where cyclists have priority.
+    CycleStreet = 12,
 
     // Bicycle-specific uses
     /// A dedicated bicycle path.
@@ -166,6 +168,7 @@ pub enum RoadUse {
     Elevator = 33,
     Escalator = 34,
     Platform = 35,
+    Ladder = 36,
 
     // Rest/Service Areas
     RestArea = 30,
@@ -214,6 +217,7 @@ impl RoadUse {
             9 => RoadUse::CulDeSac,
             10 => RoadUse::LivingStreet,
             11 => RoadUse::ServiceRoad,
+            12 => RoadUse::CycleStreet,
             20 => RoadUse::Cycleway,
             21 => RoadUse::MountainBike,
             24 => RoadUse::Sidewalk,
@@ -226,6 +230,7 @@ impl RoadUse {
             33 => RoadUse::Elevator,
             34 => RoadUse::Escalator,
             35 => RoadUse::Platform,
+            36 => RoadUse::Ladder,
             30 => RoadUse::RestArea,
             31 => RoadUse::ServiceArea,
             40 => RoadUse::Other,

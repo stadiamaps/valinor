@@ -54,6 +54,7 @@ pub use builder::GraphTileBuilder;
 pub use directed_edge::{DirectedEdge, DirectedEdgeExt};
 pub use edge_info::EdgeInfo;
 pub use header::GraphTileHeader;
+use header::VariableSectionSizes;
 pub use node::{NodeInfo, NodeTransition};
 pub use sign::{Sign, SignType};
 pub use transit::{TransitDeparture, TransitRoute, TransitSchedule, TransitStop, TransitTransfer};
@@ -92,6 +93,8 @@ pub enum GraphTileBuildError {
     InvalidVersionString(String),
     #[error("Invalid index: {0}.")]
     InvalidIndex(String),
+    #[error("would require shifting opaque tile data at byte {offset}")]
+    WouldShiftOpaqueData { offset: usize },
     #[error(
         "Bitfield overflow: Value {value} for field {field} exceeds the allowed number of bits."
     )]
@@ -478,6 +481,7 @@ pub struct GraphTileView<'a> {
     turn_lanes: &'a [TurnLane],
     admins: &'a [Admin],
     edge_bins: &'a [GraphId],
+    bin_extensions: &'a [u8],
     complex_forward_restrictions_memory: &'a [u8],
     complex_reverse_restrictions_memory: &'a [u8],
     // Variable length byte arrays (indexed into at various other points; hidden with public safe accessors)...
@@ -486,6 +490,11 @@ pub struct GraphTileView<'a> {
     text_memory: &'a [u8],
     lane_connectivity_memory: &'a [u8],
     predicted_speeds: Option<PredictedSpeeds<'a>>,
+    /// Opaque data for extensions of the tile format.
+    ///
+    /// This lets us have a modicum of forward compatibility,
+    /// even if we don't understand the data.
+    opaque_suffix: &'a [u8],
     // TODO: Stop one stops(?)
     // TODO: Route one stops(?)
     // TODO: Operator one stops(?)
@@ -667,6 +676,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
     type Error = GraphTileDecodingError;
 
     fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
+        let tile_len = bytes.len();
         let (header, bytes) = GraphTileHeader::ref_from_prefix(bytes).map_err(|e| {
             GraphTileDecodingError::CastError {
                 field: "header".to_string(),
@@ -814,22 +824,31 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
                 },
             )?;
 
+        let edge_bins_end = tile_len - bytes.len();
+        let (bin_extensions, bytes) = header.split_bin_extensions(bytes, edge_bins_end)?;
+
+        let section_sizes = VariableSectionSizes::try_from(header)?;
+        let tile_size = header.tile_size.get() as usize;
+        if tile_len < tile_size {
+            return Err(GraphTileDecodingError::SliceLength);
+        }
+
         let (complex_forward_restrictions_memory, bytes) =
-            <[u8]>::ref_from_prefix_with_elems(bytes, header.complex_forward_restrictions_size())
+            <[u8]>::ref_from_prefix_with_elems(bytes, section_sizes.forward_restrictions())
                 .map_err(|e| GraphTileDecodingError::CastError {
-                field: "complex_forward_restrictions".to_string(),
-                error_description: e.to_string(),
-            })?;
+                    field: "complex_forward_restrictions".to_string(),
+                    error_description: e.to_string(),
+                })?;
 
         let (complex_reverse_restrictions_memory, bytes) =
-            <[u8]>::ref_from_prefix_with_elems(bytes, header.complex_reverse_restrictions_size())
+            <[u8]>::ref_from_prefix_with_elems(bytes, section_sizes.reverse_restrictions())
                 .map_err(|e| GraphTileDecodingError::CastError {
-                field: "complex_reverse_restrictions".to_string(),
-                error_description: e.to_string(),
-            })?;
+                    field: "complex_reverse_restrictions".to_string(),
+                    error_description: e.to_string(),
+                })?;
 
         let (edge_info_memory, bytes) =
-            <[u8]>::ref_from_prefix_with_elems(bytes, header.edge_info_size()).map_err(|e| {
+            <[u8]>::ref_from_prefix_with_elems(bytes, section_sizes.edge_info()).map_err(|e| {
                 GraphTileDecodingError::CastError {
                     field: "edge_info_memory".to_string(),
                     error_description: e.to_string(),
@@ -837,7 +856,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             })?;
 
         let (text_memory, bytes) =
-            <[u8]>::ref_from_prefix_with_elems(bytes, header.text_list_size()).map_err(|e| {
+            <[u8]>::ref_from_prefix_with_elems(bytes, section_sizes.text_list()).map_err(|e| {
                 GraphTileDecodingError::CastError {
                     field: "text_memory".to_string(),
                     error_description: e.to_string(),
@@ -845,7 +864,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             })?;
 
         let (lane_connectivity_memory, bytes) =
-            <[u8]>::ref_from_prefix_with_elems(bytes, header.lane_connectivity_size()).map_err(
+            <[u8]>::ref_from_prefix_with_elems(bytes, section_sizes.lane_connectivity()).map_err(
                 |e| GraphTileDecodingError::CastError {
                     field: "lane_connectivity".to_string(),
                     error_description: e.to_string(),
@@ -854,7 +873,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
 
         let (predicted_speeds, bytes) = if header.predicted_speeds_count() > 0 {
             // Curiously, these seem to actually be unaligned in a Valhalla tile I generated!
-            let (offsets, profile_data) = <[U32<LE>]>::ref_from_prefix_with_elems(
+            let (offsets, bytes) = <[U32<LE>]>::ref_from_prefix_with_elems(
                 bytes,
                 header.directed_edge_count() as usize,
             )
@@ -864,7 +883,7 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
             })?;
 
             let (profiles, bytes) = <[I16<LE>]>::ref_from_prefix_with_elems(
-                profile_data,
+                bytes,
                 header.predicted_speeds_count() as usize * COEFFICIENT_COUNT,
             )
             .map_err(|e| GraphTileDecodingError::CastError {
@@ -882,6 +901,13 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
         // - Route one stops(?)
         // - Operator one stops(?)
 
+        let (opaque_suffix, bytes) =
+            <[u8]>::ref_from_prefix_with_elems(bytes, header.opaque_suffix_size()?).map_err(
+                |e| GraphTileDecodingError::CastError {
+                    field: "opaque_suffix".to_string(),
+                    error_description: e.to_string(),
+                },
+            )?;
         if bytes.is_empty() {
             Ok(Self {
                 header,
@@ -899,12 +925,14 @@ impl<'a> TryFrom<&'a [u8]> for GraphTileView<'a> {
                 turn_lanes,
                 admins,
                 edge_bins,
+                bin_extensions,
                 complex_forward_restrictions_memory,
                 complex_reverse_restrictions_memory,
                 edge_info_memory,
                 text_memory,
                 lane_connectivity_memory,
                 predicted_speeds,
+                opaque_suffix,
             })
         } else {
             Err(GraphTileDecodingError::LeftoverBytesAfterReading(
@@ -982,8 +1010,276 @@ mod tests {
         GraphTile, TEST_GRAPH_TILE_ID_L0, TEST_GRAPH_TILE_L0, TEST_GRAPH_TILE_L2,
         TEST_GRAPH_TILE_WITH_FLOW,
     };
+    use core::ops::Range;
     use enumset::{EnumSet, enum_set};
     use rand::{RngExt, rng};
+
+    const TILE_WITH_BOUNDING_CIRCLES: &[u8] = include_bytes!("../fixtures/bounding-circles.gph");
+    const FIXTURE_CIRCLE_BYTES: Range<usize> = 2360..2420;
+    const BOUNDING_CIRCLE_OFFSET_FIELD: Range<usize> = 228..232;
+    const FORWARD_RESTRICTIONS_OFFSET_FIELD: Range<usize> = 96..100;
+
+    #[test]
+    fn reads_tile_with_bounding_circles() {
+        let tile = GraphTileView::try_from(TILE_WITH_BOUNDING_CIRCLES).unwrap();
+
+        assert!(core::ptr::eq(
+            tile.bin_extensions,
+            &TILE_WITH_BOUNDING_CIRCLES[FIXTURE_CIRCLE_BYTES]
+        ));
+        assert_eq!(tile.edges_in_bin(0).len(), 15);
+        let first_edge = tile.directed_edges().first().unwrap();
+        let edge_info = tile.get_edge_info(first_edge).unwrap();
+        assert_eq!(edge_info.get_names(), ["Circle Test Road"]);
+    }
+
+    #[test]
+    fn rejects_inconsistent_bounding_circle_offsets() {
+        for field in [
+            BOUNDING_CIRCLE_OFFSET_FIELD,
+            FORWARD_RESTRICTIONS_OFFSET_FIELD,
+        ] {
+            let mut bytes = TILE_WITH_BOUNDING_CIRCLES.to_vec();
+            let offset = u32::from_le_bytes(bytes[field.clone()].try_into().unwrap());
+            bytes[field.clone()].copy_from_slice(&(offset - 4).to_le_bytes());
+
+            assert!(
+                matches!(
+                    GraphTileView::try_from(bytes.as_slice()),
+                    Err(GraphTileDecodingError::CastError { field, .. }) if field == "bounding_circles"
+                ),
+                "moving the offset in header bytes {field:?} four bytes earlier should produce a bounding_circles cast error"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_forward_restrictions_starting_inside_edge_bins() {
+        let mut bytes = TILE_WITH_BOUNDING_CIRCLES.to_vec();
+        let forward = u32::try_from(FIXTURE_CIRCLE_BYTES.start - 1).unwrap();
+        bytes[FORWARD_RESTRICTIONS_OFFSET_FIELD].copy_from_slice(&forward.to_le_bytes());
+
+        assert!(matches!(
+            GraphTileView::try_from(bytes.as_slice()),
+            Err(GraphTileDecodingError::CastError { field, .. }) if field == "edge_bin_extensions"
+        ));
+    }
+
+    #[test]
+    fn rejects_truncated_bounding_circles() {
+        let bytes = &TILE_WITH_BOUNDING_CIRCLES[..FIXTURE_CIRCLE_BYTES.end - 1];
+
+        assert!(
+            matches!(
+                GraphTileView::try_from(bytes),
+                Err(GraphTileDecodingError::CastError { field, .. }) if field == "edge_bin_extensions"
+            ),
+            "truncating the final bounding-circle byte should produce an edge_bin_extensions cast error"
+        );
+    }
+
+    #[test]
+    fn reports_truncated_bin_extensions_before_invalid_circle_offset() {
+        let mut bytes = TILE_WITH_BOUNDING_CIRCLES[..FIXTURE_CIRCLE_BYTES.end - 1].to_vec();
+        let circle_offset = u32::try_from(FIXTURE_CIRCLE_BYTES.start - 1).unwrap();
+        bytes[BOUNDING_CIRCLE_OFFSET_FIELD].copy_from_slice(&circle_offset.to_le_bytes());
+
+        assert!(matches!(
+            GraphTileView::try_from(bytes.as_slice()),
+            Err(GraphTileDecodingError::CastError { field, .. }) if field == "edge_bin_extensions"
+        ));
+    }
+
+    #[test]
+    fn preserves_declared_extensions_when_adding_predicted_speeds() {
+        let original = GraphTileView::try_from(TILE_WITH_BOUNDING_CIRCLES).unwrap();
+        let extension = [0xA5; 8];
+        for extension_start in [
+            FIXTURE_CIRCLE_BYTES.start,
+            FIXTURE_CIRCLE_BYTES.end,
+            2840,
+            2868,
+            TILE_WITH_BOUNDING_CIRCLES.len(),
+        ] {
+            let mut bytes = TILE_WITH_BOUNDING_CIRCLES.to_vec();
+            bytes.splice(extension_start..extension_start, extension);
+            // Shift any known sections at or after the insertion, plus the tile end.
+            for offset in [96, 100, 104, 108, 216, 224, 228] {
+                let field = &mut bytes[offset..offset + 4];
+                let start = u32::from_le_bytes(field.try_into().unwrap());
+                if start as usize >= extension_start {
+                    field.copy_from_slice(
+                        &(start + u32::try_from(extension.len()).unwrap()).to_le_bytes(),
+                    );
+                }
+            }
+            bytes[232..236].copy_from_slice(&u32::try_from(extension_start).unwrap().to_le_bytes());
+
+            let tile_size = u32::try_from(bytes.len()).unwrap();
+            bytes[236..240].copy_from_slice(&tile_size.to_le_bytes());
+
+            let handle = OwnedGraphTileHandle::try_from(bytes).unwrap();
+            let rebuilt = GraphTileBuilder::from(&handle)
+                .with_predicted_speed_coefficients(0, &[1; COEFFICIENT_COUNT])
+                .unwrap()
+                .into_bytes()
+                .unwrap();
+            let tile = GraphTileView::try_from(rebuilt.as_slice()).unwrap();
+            let edge_info = tile.get_edge_info(&tile.directed_edges()[0]).unwrap();
+            assert_eq!(
+                edge_info.get_names(),
+                ["Circle Test Road"],
+                "edge name after adding predicted speeds with an extension at byte {extension_start}"
+            );
+            assert_eq!(
+                tile.edge_bins, original.edge_bins,
+                "edge bins after adding predicted speeds with an extension at byte {extension_start}"
+            );
+            assert_eq!(
+                &rebuilt[extension_start..extension_start + extension.len()],
+                &extension,
+                "extension bytes should remain at byte {extension_start}"
+            );
+            assert_eq!(
+                &rebuilt[232..236],
+                &u32::try_from(extension_start).unwrap().to_le_bytes(),
+                "the first expansion slot should still point to byte {extension_start}"
+            );
+            assert_eq!(
+                &rebuilt[236..240],
+                &u32::try_from(rebuilt.len()).unwrap().to_le_bytes(),
+                "the second expansion slot should track the new tile end with an extension at byte {extension_start}"
+            );
+            assert!(
+                tile.get_predicted_speed(0, 0).is_some(),
+                "edge 0 should have a predicted speed with an extension at byte {extension_start}"
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_extension_after_predicted_speeds_on_fixed_size_rewrite() {
+        let handle = OwnedGraphTileHandle::try_from(TILE_WITH_BOUNDING_CIRCLES.to_vec()).unwrap();
+        let mut bytes = GraphTileBuilder::from(&handle)
+            .with_predicted_speed_coefficients(0, &[1; COEFFICIENT_COUNT])
+            .unwrap()
+            .into_bytes()
+            .unwrap();
+        let extension_start = bytes.len();
+        let extension = [0xA5; 8];
+        bytes.extend(extension);
+        assert!(
+            matches!(
+                GraphTileView::try_from(bytes.as_slice()),
+                Err(GraphTileDecodingError::LeftoverBytesAfterReading(8))
+            ),
+            "the eight undeclared bytes after predicted speeds should be reported as leftover bytes"
+        );
+        let tile_size = u32::try_from(bytes.len()).unwrap();
+        bytes[224..228].copy_from_slice(&tile_size.to_le_bytes());
+        bytes[232..236].copy_from_slice(&u32::try_from(extension_start).unwrap().to_le_bytes());
+
+        let handle = OwnedGraphTileHandle::try_from(bytes).unwrap();
+        let rebuilt = GraphTileBuilder::from(&handle)
+            .with_average_speeds(0, 40, 30)
+            .unwrap()
+            .into_bytes()
+            .unwrap();
+        let tile = GraphTileView::try_from(rebuilt.as_slice()).unwrap();
+        assert_eq!(
+            tile.directed_edges()[0].free_flow_speed(),
+            40,
+            "the rewrite should update the first edge's free-flow speed"
+        );
+        assert!(
+            tile.get_predicted_speed(0, 0).is_some(),
+            "the rewrite should retain the first edge's predicted speed"
+        );
+        assert_eq!(
+            &rebuilt[232..236],
+            &u32::try_from(extension_start).unwrap().to_le_bytes(),
+            "the first expansion slot should still point to byte {extension_start}"
+        );
+        assert_eq!(
+            &rebuilt[extension_start..],
+            &extension,
+            "the rewrite should preserve the extension bytes after predicted speeds"
+        );
+
+        let result = GraphTileBuilder::from(&handle)
+            .with_predicted_speed_coefficients(1, &[2; COEFFICIENT_COUNT])
+            .unwrap()
+            .into_bytes();
+        assert!(
+            matches!(
+                result,
+                Err(GraphTileBuildError::WouldShiftOpaqueData { offset }) if offset == extension_start
+            ),
+            "adding a second speed profile would shift the extension at byte {extension_start}"
+        );
+    }
+
+    #[test]
+    fn rejects_reversed_variable_section_offsets() {
+        let mut bytes = TILE_WITH_BOUNDING_CIRCLES.to_vec();
+        let reverse = 100..104;
+        let start = u32::from_le_bytes(bytes[reverse.clone()].try_into().unwrap());
+        bytes[reverse].copy_from_slice(&(start - 1).to_le_bytes());
+
+        assert!(matches!(
+            GraphTileView::try_from(bytes.as_slice()),
+            Err(GraphTileDecodingError::CastError { field, error_description })
+                if field == "section_offsets" && error_description.contains("forward restrictions")
+        ));
+    }
+
+    #[test]
+    fn ignores_predicted_speeds_offset_without_profiles() {
+        let mut bytes = TILE_WITH_BOUNDING_CIRCLES.to_vec();
+        bytes[220..224].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let tile = GraphTileView::try_from(bytes.as_slice()).unwrap();
+        assert!(tile.predicted_speeds.is_none());
+        assert_eq!(tile.lane_connectivity_memory, &bytes[2868..2872]);
+    }
+
+    #[test]
+    fn preserves_bounding_circles_when_adding_predicted_speeds() {
+        let handle = OwnedGraphTileHandle::try_from(TILE_WITH_BOUNDING_CIRCLES.to_vec()).unwrap();
+        let original = handle.borrow_dependent();
+        let bytes = GraphTileBuilder::from(&handle)
+            .with_predicted_speed_coefficients(0, &[1; COEFFICIENT_COUNT])
+            .unwrap()
+            .into_bytes()
+            .unwrap();
+        let updated = GraphTileView::try_from(bytes.as_slice()).unwrap();
+
+        assert_eq!(
+            updated.edge_bins, original.edge_bins,
+            "adding predicted speeds should preserve the edge bins"
+        );
+        assert_eq!(
+            &bytes[FIXTURE_CIRCLE_BYTES], &TILE_WITH_BOUNDING_CIRCLES[FIXTURE_CIRCLE_BYTES],
+            "adding predicted speeds should preserve the bounding-circle bytes"
+        );
+        assert_eq!(
+            updated.edge_info_memory, original.edge_info_memory,
+            "adding predicted speeds should preserve the edge info bytes"
+        );
+        assert_eq!(
+            updated.text_memory, original.text_memory,
+            "adding predicted speeds should preserve the text bytes"
+        );
+        assert_eq!(
+            &bytes[2868..2872],
+            &TILE_WITH_BOUNDING_CIRCLES[2868..2872],
+            "adding predicted speeds should preserve the fixture's padding bytes"
+        );
+        assert!(
+            updated.get_predicted_speed(0, 0).is_some(),
+            "the rebuilt tile should have a predicted speed for the first edge"
+        );
+    }
 
     #[test]
     fn test_get_opp_edge_index() {
