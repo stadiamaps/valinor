@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+pub mod extract;
 mod graph_id;
 pub mod graph_tile;
 pub mod shape_codec;

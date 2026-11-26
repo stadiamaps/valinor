@@ -114,10 +114,10 @@ impl<const MUT: bool, const CACHE: bool> TarballTileProvider<MUT, CACHE> {
         };
 
         let mut entry = entry?;
-        if entry.path()?.to_string_lossy() != "index.bin" {
-            return Err(GraphTileProviderError::InvalidTarball(
-                "Expected index.bin at the start of the archive".to_string(),
-            ));
+        if entry.path()?.to_string_lossy() != INDEX_BIN_FILE_NAME {
+            return Err(GraphTileProviderError::InvalidTarball(format!(
+                "Expected {INDEX_BIN_FILE_NAME} at the start of the archive"
+            )));
         }
 
         // Read the index file
@@ -460,11 +460,14 @@ pub struct TileIndexBinEntry {
 }
 
 /// The size of one [`TileIndexBinEntry`] in bytes.
-const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
+pub(crate) const INDEX_ENTRY_SIZE: usize = size_of::<TileIndexBinEntry>();
 
 /// The block size of a tar archive.
 /// The data of each tar entry starts on a block boundary.
-const TAR_BLOCK_SIZE: u64 = 512;
+pub(crate) const TAR_BLOCK_SIZE: u64 = 512;
+
+/// The file name of the tile index.
+pub(crate) const INDEX_BIN_FILE_NAME: &str = "index.bin";
 
 /// The reasons why an `index.bin` file or one of its entries is not valid.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -537,13 +540,13 @@ impl TileIndexBinEntry {
 
     /// The byte offset of the tile payload from the beginning of the tarball.
     #[inline]
-    pub fn offset(&self) -> u64 {
+    pub(crate) fn offset(&self) -> u64 {
         self.offset.get()
     }
 
     /// The size of the tile in bytes.
     #[inline]
-    pub fn size(&self) -> u32 {
+    pub(crate) fn size(&self) -> u32 {
         self.size.get()
     }
 }
